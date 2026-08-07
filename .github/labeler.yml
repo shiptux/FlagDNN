@@ -1,0 +1,58 @@
+# Auto-label PRs from the final Native repository layout.
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: "tests/**"
+
+benchmark:
+  - changed-files:
+      - any-glob-to-any-file: "benchmark/**"
+
+operators:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "include/flagdnn/frontend.hpp"
+          - "include/flagnn_frontend.h"
+          - "src/graph/**"
+          - "kernels/**"
+          - "cmake/Operators.cmake"
+
+compiler:
+  - changed-files:
+      - any-glob-to-any-file: "compiler/**"
+
+vendor/NVIDIA:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "backends/nvidia/**"
+          - "tools/check_nvidia_gpu.sh"
+
+vendor/ASCEND:
+  - changed-files:
+      - any-glob-to-any-file: "backends/ascend/**"
+
+vendor/ILUVATAR:
+  - changed-files:
+      - any-glob-to-any-file: "backends/iluvatar/**"
+
+core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "include/**"
+          - "src/**"
+          - "backends/common/**"
+          - "CMakeLists.txt"
+          - "cmake/**"
+
+ci/cd:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "tools/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "README.md"
+          - "docs/**"
+          - "LICENSE"

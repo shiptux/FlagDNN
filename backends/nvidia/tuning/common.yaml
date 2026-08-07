@@ -1,0 +1,3002 @@
+# Copyright 2026 FlagOS Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+reduction:
+  - META:
+      BLOCK_M: 128
+      BLOCK_N: 8
+    num_warps: 4
+    num_stages: 1
+  - META:
+      BLOCK_M: 256
+      BLOCK_N: 8
+    num_warps: 4
+    num_stages: 1
+  - META:
+      BLOCK_M: 512
+      BLOCK_N: 8
+    num_warps: 8
+    num_stages: 1
+  - META:
+      BLOCK_M: 1024
+      BLOCK_N: 8
+    num_warps: 8
+    num_stages: 1
+  - META:
+      BLOCK_M: 128
+      BLOCK_N: 16
+    num_warps: 4
+    num_stages: 1
+  - META:
+      BLOCK_M: 256
+      BLOCK_N: 16
+    num_warps: 4
+    num_stages: 1
+scal:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+        KERNEL_ID: kernel_id
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    kernel_id:
+      - 0
+      - 1
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+relu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+gelu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+silu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+leaky_relu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+prelu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+softmax:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096      # 针对大词表新增的大块读取
+      - 8192      # 极限显存吞吐块大小
+    warps:
+      - 4
+      - 8
+      - 16
+      - 32
+    stages:
+      - 2
+      - 3
+      - 4         # 增加流水线深度，有助于掩盖大块访存延迟
+sdpa:
+  # Pareto set for generic SDPA forward after H100 autotune. Covers D64
+  # prefill/causal, D128 causal, and MHA decode; GQA decode and exact
+  # dense D128 use dedicated entries below.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+      - 128
+    block_n:
+      - 64
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+
+sdpa_fp8:
+  # Generic fp8 (e4m3/e5m2) SDPA forward on H100. fp8 wgmma favours larger
+  # KV tiles and deeper pipelines than the fp16/bf16 generic path.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+      - 128
+    block_n:
+      - 64
+      - 128
+    warps:
+      - 4
+      - 8
+    stages:
+      - 3
+      - 4
+
+sdpa_fp8_tma:
+  # TMA-descriptor fp8 SDPA forward (FA3-style): hardware K/V loads + deep
+  # pipeline for contiguous power-of-two head_dim, dense / top-left causal.
+  # TMA decouples loads from compute, so larger KV tiles (block_n up to 256)
+  # and deep pipelines pay off here unlike the manual-load lean path.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+      - 128
+    block_n:
+      - 64
+      - 128
+      - 256
+    warps:
+      - 4
+      - 8
+    stages:
+      - 3
+      - 4
+
+sdpa_fp8_gqa_causal_tma:
+  # Grouped-query causal fp8 SDPA forward for D128 contiguous GQA prefill.
+  # One CTA covers multiple query heads that share one K/V head, reducing
+  # repeated descriptor loads on the LLaMA-class fp8 GQA benchmark shapes.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_H: block_h
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 16
+      - 32
+    block_h:
+      - 2
+      - 4
+    block_n:
+      - 64
+      - 128
+    warps:
+      - 4
+      - 8
+    stages:
+      - 3
+      - 4
+
+sdpa_fp8_gqa_causal_vt:
+  # Prepacked-VT fp8 SDPA forward for long causal D128 MHA/GQA rows.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_H: block_h
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 16
+      - 64
+    block_h:
+      - 1
+      - 4
+    block_n:
+      - 64
+      - 128
+    warps:
+      - 4
+    stages:
+      - 3
+
+sdpa_fp8_fast:
+  # Lean fp8 SDPA forward (constexpr strides, dense / top-left causal, no bias)
+  # for power-of-two head_dim. Keep a narrow grid, but include block_n=256 and
+  # 2-stage variants for short dense/causal D128 cases where they can reduce
+  # loop overhead.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+      - 128
+    block_n:
+      - 64
+      - 128
+      - 256
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+      - 4
+sdpa_dense_exact:
+  # Exact dense low-precision D128 SDPA forward without bias/stats.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 128
+    block_n:
+      - 32
+    warps:
+      - 8
+    stages:
+      - 3
+      - 4
+sdpa_gqa_causal:
+  # Grouped-query causal prefill fast path for low-precision D128.
+  # Retuned after reverse-M scheduling for group<=4 GQA exact causal stats cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_H: block_h
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 16
+    block_h:
+      - 4
+    block_n:
+      - 64
+    warps:
+      - 4
+    stages:
+      - 3
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_H: block_h
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 32
+    block_h:
+      - 2
+    block_n:
+      - 64
+    warps:
+      - 4
+    stages:
+      - 3
+sdpa_mha_causal_desc:
+  # TMA descriptor-load MHA causal prefill for contiguous low-precision D128 shape2.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    warps:
+      - 4
+    stages:
+      - 3
+sdpa_gqa_causal_desc:
+  # TMA descriptor-load GQA causal prefill for contiguous low-precision D128 shape5.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_H: block_h
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 16
+    block_h:
+      - 4
+    block_n:
+      - 64
+    warps:
+      - 4
+    stages:
+      - 3
+sdpa_mha_causal_hostdesc:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m: [64]
+    block_n: [64]
+    warps: [4]
+    stages: [3]
+
+sdpa_decode:
+  # Split-KV flash-decoding partial kernel (seq_q == 1).
+  - gen: true
+    param_map:
+      META:
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_n:
+      - 64
+      - 128
+      - 256
+    warps:
+      - 4
+    stages:
+      - 2
+      - 3
+sdpa_backward_fused_atomic_d32:
+  # Atomic fused tile fast path for dense non-causal D32 backward cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 32
+    warps:
+      - 4
+    stages:
+      - 2
+
+sdpa_backward_fused_atomic:
+  # Atomic fused tile fast path for dense non-causal D64 backward cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 64
+    warps:
+      - 4
+    stages:
+      - 2
+
+sdpa_backward_fused_atomic_d128:
+  # Atomic fused tile fast path for dense non-causal D128 backward cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+
+
+sdpa_backward_dense_mloop_d64:
+  # Dense non-causal D64 backward: dQ direct write, dK/dV atomic.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 64
+    warps:
+      - 4
+    stages:
+      - 3
+
+sdpa_backward_dense_mloop_d128:
+  # Dense non-causal D128 backward: dQ direct write, dK/dV atomic.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+
+sdpa_backward_fused_atomic_causal:
+  # Atomic fused tile fast path for small top-left causal backward cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 64
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_fused_atomic_causal_d128:
+  # Atomic fused tile fast path for D128 top-left causal backward cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 3
+sdpa_backward_fused_atomic_gqa_causal_d128:
+  # Atomic fused tile fast path for D128 top-left causal GQA backward cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_gqa_dq_delta_d128:
+  # GQA D128 top-left causal backward dQ path that also stores row delta.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_mloop_causal_d128:
+  # M-loop D128 top-left causal backward: dQ direct write, dK/dV atomic.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 64
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_owner_mha_causal_d128:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M_DKDV: block_m_dkdv
+        BLOCK_N_DKDV: block_n_dkdv
+        BLOCK_M_DQ: block_m_dq
+        BLOCK_N_DQ: block_n_dq
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m_dkdv: [64]
+    block_n_dkdv: [64]
+    block_m_dq: [64]
+    block_n_dq: [64]
+    block_d: [128]
+    warps: [4]
+    stages: [2]
+sdpa_backward_decode_d128:
+  # SQ=1 non-GQA D128 backward: dK/dV direct store and dQ atomic accumulation.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_n:
+      - 256
+    block_d:
+      - 128
+    warps:
+      - 8
+    stages:
+      - 2
+sdpa_backward_zero_delta:
+  # Combined output zeroing and row delta precompute for D128 causal fused backward.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_ZERO: block_zero
+        BLOCK_M: block_m
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_zero:
+      - 1024
+    block_m:
+      - 64
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_dq:
+  # Dense BHSD SDPA backward dQ/dBias kernel. Keep the search space
+  # narrow; larger grids are expanded only after benchmark evidence.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D_OUT: block_d_out
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 32
+    block_d_out:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_dkdv:
+  # Fused dK/dV path used when K and V head dimensions match. Narrowed
+  # from the H100 sweeps recorded in .kernel-generate/optimization-log-sdpa_backward.md.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D_OUT: block_d_out
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 32
+    block_d_out:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_dk:
+  # Fallback dK path for V_DIM != HEAD_DIM. Keep aligned with fused dK/dV.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D_OUT: block_d_out
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 32
+    block_d_out:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_backward_dv:
+  # Fallback dV path for V_DIM != HEAD_DIM. Keep aligned with fused dK/dV.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_DV_OUT: block_dv_out
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 64
+    block_n:
+      - 32
+    block_dv_out:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+sdpa_fp8_backward_dq:
+  # Current-scaling fp8 SDPA backward dQ path for dense/top-left causal BHSD.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 128
+    block_n:
+      - 64
+      - 128
+    block_d:
+      - 128
+    warps:
+      - 8
+    stages:
+      - 2
+sdpa_fp8_backward_dkdv:
+  # Current-scaling fp8 SDPA backward fused dK/dV path.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 128
+    block_n:
+      - 128
+    block_d:
+      - 128
+    warps:
+      - 8
+    stages:
+      - 2
+sdpa_fp8_backward_gqa_accum:
+  # GQA fp8 SDPA backward partial dK/dV accumulation per query head.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 128
+    block_n:
+      - 128
+    block_d:
+      - 128
+    warps:
+      - 8
+    stages:
+      - 2
+sdpa_fp8_backward_gqa_reduce:
+  # GQA fp8 SDPA backward reduce partial dK/dV and quantize.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_N: block_n
+        BLOCK_D: block_d
+      num_warps: warps
+      num_stages: stages
+    block_n:
+      - 32
+    block_d:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 2
+batch_norm:
+  - META:
+      BLOCK_SIZE: 128
+    num_warps: 2
+    num_stages: 2
+  - META:
+      BLOCK_SIZE: 256
+    num_warps: 4
+    num_stages: 2
+  - META:
+      BLOCK_SIZE: 512
+    num_warps: 4
+    num_stages: 2
+  - META:
+      BLOCK_SIZE: 1024
+    num_warps: 8
+    num_stages: 3
+  - META:
+      BLOCK_SIZE: 1024
+    num_warps: 16
+    num_stages: 2
+  - META:
+      BLOCK_SIZE: 2048
+    num_warps: 16
+    num_stages: 2
+  - META:
+      BLOCK_SIZE: 1024
+    num_warps: 8
+    num_stages: 1
+  - META:
+      BLOCK_SIZE: 2048
+    num_warps: 16
+    num_stages: 1
+  - META:
+      BLOCK_SIZE: 4096
+    num_warps: 16
+    num_stages: 2
+pow:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+sqrt:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+abs:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+neg:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+clamp:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+binary:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+add_square:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+        TILES_PER_PROGRAM: tiles_per_program
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    tiles_per_program:
+      - 1
+    warps:
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+unary:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+        TILES_PER_PROGRAM: tiles_per_program
+        num_warps: warps
+        num_stages: stages
+    block_size:
+      - 512
+      - 1024
+      - 2048
+      - 4096
+      - 8192
+    tiles_per_program:
+      - 1
+      - 2
+      - 4
+      - 8
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+layer_norm:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+  - META: {BLOCK_SIZE: 4096}
+    num_warps: 4
+    num_stages: 1
+rms_norm:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+group_norm:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+max_pool1d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+avg_pool1d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+max_pool2d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+avg_pool2d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+max_pool3d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+avg_pool3d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+adaptive_max_pool1d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+adaptive_max_pool2d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+adaptive_max_pool3d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+adaptive_avg_pool1d_global:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+adaptive_avg_pool1d_divisible_large:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 16
+      - 32
+      - 64
+      - 128
+    warps:
+      - 1
+      - 2
+      - 4
+    stages:
+      - 1
+      - 2
+adaptive_avg_pool1d_general_large:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 16
+      - 32
+      - 64
+      - 128
+    warps:
+      - 1
+      - 2
+      - 4
+    stages:
+      - 1
+      - 2
+adaptive_avg_pool2d_global:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 32
+      - 64
+      - 128
+      - 256
+      - 512
+    warps:
+      - 1
+      - 2
+      - 4
+    stages:
+      - 1
+      - 2
+      - 3
+adaptive_avg_pool2d_divisible_large:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_H: block_h
+        BLOCK_W: block_w
+      num_warps: warps
+      num_stages: stages
+    block_h:
+      - 1
+      - 2
+      - 4
+      - 8
+    block_w:
+      - 4
+      - 8
+      - 16
+    warps:
+      - 1
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+      - 3
+adaptive_avg_pool2d_general_large:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_H: block_h
+        BLOCK_W: block_w
+      num_warps: warps
+      num_stages: stages
+    block_h:
+      - 1
+      - 2
+      - 4
+      - 8
+    block_w:
+      - 4
+      - 8
+      - 16
+    warps:
+      - 1
+      - 2
+      - 4
+    stages:
+      - 1
+      - 2
+adaptive_avg_pool3d_global:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 32
+      - 64
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+    warps:
+      - 2
+      - 4
+      - 8
+      - 16
+    stages:
+      - 1
+      - 2
+      - 3
+      - 4
+adaptive_avg_pool3d_divisible_large:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_D: block_d
+        BLOCK_H: block_h
+        BLOCK_W: block_w
+      num_warps: warps
+      num_stages: stages
+    block_d:
+      - 1
+      - 2
+      - 4
+    block_h:
+      - 1
+      - 2
+      - 4
+      - 8
+    block_w:
+      - 4
+      - 8
+      - 16
+    warps:
+      - 1
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+      - 3
+adaptive_avg_pool3d_general_large:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_D: block_d
+        BLOCK_H: block_h
+        BLOCK_W: block_w
+      num_warps: warps
+      num_stages: stages
+    block_d:
+      - 1
+      - 2
+      - 4
+    block_h:
+      - 1
+      - 2
+      - 4
+      - 8
+    block_w:
+      - 4
+      - 8
+      - 16
+    warps:
+      - 1
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+      - 3
+threshold:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+hardtanh:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+elu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+rrelu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+mish:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+softsign:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+softplus:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+softshrink:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+softmin:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+      - 8192
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+softmin_fp64:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 2
+      - 3
+mv:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 1
+      - 4
+      - 8
+      - 16
+      - 32
+      - 64
+      - 128
+    block_n:
+      - 32
+      - 64
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+mv_wide:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_n:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+mv_fp64:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 1
+      - 2
+      - 4
+      - 8
+      - 16
+      - 32
+    block_n:
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+      - 5
+mv_wide_fp64:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_N: block_n
+      num_warps: warps
+      num_stages: stages
+    block_n:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    warps:
+      - 2
+      - 4
+      - 8
+      - 16
+    stages:
+      - 2
+      - 3
+      - 4
+      - 5
+matmul:
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 16
+        BLOCK_N: 32
+        BLOCK_K: 32
+        GROUP_M: 8
+      - BLOCK_M: 32
+        BLOCK_N: 32
+        BLOCK_K: 32
+        GROUP_M: 8
+      - BLOCK_M: 32
+        BLOCK_N: 64
+        BLOCK_K: 32
+        GROUP_M: 8
+      - BLOCK_M: 64
+        BLOCK_N: 64
+        BLOCK_K: 32
+        GROUP_M: 8
+    warps:
+      - 4
+    stages:
+      - 3
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 64
+        BLOCK_N: 128
+        BLOCK_K: 64
+        GROUP_M: 8
+      - BLOCK_M: 128
+        BLOCK_N: 64
+        BLOCK_K: 64
+        GROUP_M: 8
+      - BLOCK_M: 128
+        BLOCK_N: 128
+        BLOCK_K: 64
+        GROUP_M: 8
+    warps:
+      - 8
+    stages:
+      - 3
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 128
+        BLOCK_N: 256
+        BLOCK_K: 64
+        GROUP_M: 4
+      - BLOCK_M: 256
+        BLOCK_N: 128
+        BLOCK_K: 64
+        GROUP_M: 4
+    warps:
+      - 8
+    stages:
+      - 3
+      - 4
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 128
+        BLOCK_N: 128
+        BLOCK_K: 128
+        GROUP_M: 8
+      - BLOCK_M: 128
+        BLOCK_N: 256
+        BLOCK_K: 128
+        GROUP_M: 4
+      - BLOCK_M: 256
+        BLOCK_N: 128
+        BLOCK_K: 128
+        GROUP_M: 4
+    warps:
+      - 8
+    stages:
+      - 2
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 128
+        BLOCK_N: 256
+        BLOCK_K: 32
+        GROUP_M: 4
+      - BLOCK_M: 256
+        BLOCK_N: 128
+        BLOCK_K: 32
+        GROUP_M: 4
+    warps:
+      - 8
+    stages:
+      - 4
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 128
+        BLOCK_N: 256
+        BLOCK_K: 64
+        GROUP_M: 16
+    warps:
+      - 8
+    stages:
+      - 4
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 256
+        BLOCK_N: 128
+        BLOCK_K: 64
+        GROUP_M: 1
+    warps:
+      - 16
+    stages:
+      - 3
+
+
+
+matmul_persistent:
+  - gen: true
+    param_map:
+      META: meta
+      num_warps: warps
+      num_stages: stages
+    meta:
+      - BLOCK_M: 128
+        BLOCK_N: 256
+        BLOCK_K: 64
+        GROUP_M: 16
+    warps:
+      - 8
+    stages:
+      - 4
+
+matmul_fp8_sm90:
+  # H100, batched row-major FP8 inputs with FP32 accumulation/output.
+  # Selected from a 47-config TMA search over the benchmark shapes.
+  - META:
+      BLOCK_M: 256
+      BLOCK_N: 64
+      BLOCK_K: 128
+      GROUP_M: 4
+      GRID_MULTIPLIER: 1
+    num_warps: 8
+    num_stages: 3
+
+matmul_fp8_transpose_sm90:
+  # The 64x64 tile was faster than 32x32 and 128x128 on H100.
+  - META:
+      BLOCK: 64
+    num_warps: 8
+    num_stages: 1
+
+mm:
+  - META:
+      BLOCK_M: 16
+      BLOCK_N: 16
+      BLOCK_K: 32
+      GROUP_M: 8
+    num_warps: 4
+    num_stages: 3
+  - META:
+      BLOCK_M: 32
+      BLOCK_N: 32
+      BLOCK_K: 32
+      GROUP_M: 8
+    num_warps: 4
+    num_stages: 3
+  - META:
+      BLOCK_M: 64
+      BLOCK_N: 64
+      BLOCK_K: 32
+      GROUP_M: 8
+    num_warps: 4
+    num_stages: 3
+  - META:
+      BLOCK_M: 64
+      BLOCK_N: 64
+      BLOCK_K: 64
+      GROUP_M: 8
+    num_warps: 4
+    num_stages: 4
+  - META:
+      BLOCK_M: 64
+      BLOCK_N: 128
+      BLOCK_K: 64
+      GROUP_M: 8
+    num_warps: 4
+    num_stages: 4
+  - META:
+      BLOCK_M: 128
+      BLOCK_N: 64
+      BLOCK_K: 64
+      GROUP_M: 8
+    num_warps: 4
+    num_stages: 4
+dot:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+        UNROLL: unroll
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    unroll:
+      - 2
+      - 4
+      - 8
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+
+dot_fp64:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+        UNROLL: unroll
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 64
+      - 128
+      - 256
+      - 512
+    unroll:
+      - 2
+      - 4
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+hardswish:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+relu6:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+selu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+celu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+glu:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+tanh:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+sigmoid:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+sigmoid_backward:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+logsigmoid:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+      - 256
+      - 512
+      - 1024
+    warps:
+      - 2
+      - 4
+      - 8
+    stages:
+      - 1
+      - 2
+conv1d_gemm_v3:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_OC: block_oc
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_m:
+      - 32
+      - 64
+      - 128
+    block_oc:
+      - 32
+      - 64
+      - 128
+    block_k:
+      - 32
+      - 64
+    warps:
+      - 4
+    stages:
+      - 2
+conv1d_general:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_SIZE: block_size
+      num_warps: warps
+      num_stages: stages
+    block_size:
+      - 128
+    warps:
+      - 4
+    stages:
+      - 1
+conv1d_depthwise_v5:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_C: block_c
+        BLOCK_L: block_l
+      num_warps: warps
+      num_stages: stages
+    block_c:
+      - 8
+      - 16
+      - 32
+    block_l:
+      - 128
+      - 256
+    warps:
+      - 4
+    stages:
+      - 2
+gen_index:
+  - META: {BLOCK_SIZE: 256}
+    num_warps: 1
+    num_stages: 1
+  - META: {BLOCK_SIZE: 256}
+    num_warps: 2
+    num_stages: 1
+  - META: {BLOCK_SIZE: 512}
+    num_warps: 2
+    num_stages: 1
+  - META: {BLOCK_SIZE: 512}
+    num_warps: 4
+    num_stages: 1
+  - META: {BLOCK_SIZE: 1024}
+    num_warps: 4
+    num_stages: 1
+  - META: {BLOCK_SIZE: 1024}
+    num_warps: 8
+    num_stages: 1
+  - META: {BLOCK_SIZE: 2048}
+    num_warps: 4
+    num_stages: 1
+  - META: {BLOCK_SIZE: 2048}
+    num_warps: 8
+    num_stages: 1
+conv2d_spatial:
+  # Generic NCHW implicit-GEMM fallback. Keep K=32 in the search because fp32
+  # TF32 cases in the latest report regressed with only K=64/128 choices.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [32, 64, 128]
+    block_hw: [64, 128]
+    block_k: [32, 64]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [128, 256]
+    block_hw: [32, 64]
+    block_k: [64, 128]
+    warps: [4]
+    stages: [3]
+
+conv2d_spatial_nchw_packed:
+  # Packed KHW path, also used by the new global interior/border split kernels.
+  # General fp32/fp16/bf16 3x3 search.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [32, 64, 128]
+    block_hw: [64, 128]
+    block_k: [32, 64]
+    warps: [4]
+    stages: [3]
+
+  # High-channel global-split 14x14/7x7 family.  M spans N, so HW=64/128 keeps
+  # Tensor Core/TF32 tiles filled without the Winograd transform overhead.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [128, 256]
+    block_hw: [64, 128]
+    block_k: [64, 128]
+    warps: [4, 8]
+    stages: [3]
+
+  # Per-batch split fallback for very small border/interior bands when the
+  # global split predicate does not apply.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [128, 256]
+    block_hw: [16, 32]
+    block_k: [64, 128]
+    warps: [4]
+    stages: [3]
+
+conv2d_1x1:
+  # Per-batch NCHW 1x1 pad0/general path.  Add K=32 for fp32 small-C cases and
+  # keep the larger OC/HW options that are good for fp16/bf16.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [64, 128]
+    block_hw: [128, 256]
+    block_k: [32, 64]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [128, 256]
+    block_hw: [64, 128]
+    block_k: [64, 128, 256]
+    warps: [4]
+    stages: [3]
+
+conv2d_1x1_nchw_m:
+  # M-spanning 1x1 path.  Slightly broader than the previous slim space because
+  # fp32 1x1 still has several <1 speedup cases.
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [128, 256]
+    block_hw: [64, 128, 256]
+    block_k: [64, 128]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_OC: block_oc
+        BLOCK_HW: block_hw
+        BLOCK_K: block_k
+      num_warps: warps
+      num_stages: stages
+    block_oc: [64]
+    block_hw: [128, 256]
+    block_k: [32, 64]
+    warps: [4]
+    stages: [3]
+
+conv2d_dw_v2:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_C: block_c
+        BLOCK_HW: block_hw
+      num_warps: warps
+      num_stages: stages
+    block_c: [8, 16, 32, 64]
+    block_hw: [64, 128]
+    warps: [1, 2]
+    stages: [1]
+
+conv2d_dw_c1:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_HW: block_hw
+      num_warps: warps
+      num_stages: stages
+    block_hw: [128, 256]
+    warps: [1, 2]
+    stages: [1]
+
+conv_dgrad_1d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32, 64]
+    block_ci: [16, 32]
+    block_co: [32, 64]
+    warps: [4]
+    stages: [3]
+
+
+conv_dgrad_1d_mci:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32, 64]
+    block_ci: [16, 32]
+    block_co: [32, 64, 128]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [64]
+    block_ci: [32]
+    block_co: [64, 128]
+    warps: [8]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [128]
+    block_ci: [16]
+    block_co: [64, 128]
+    warps: [4]
+    stages: [3]
+
+conv_dgrad_2d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32, 64]
+    block_ci: [16, 32]
+    block_co: [32, 64]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32, 64]
+    block_ci: [16]
+    block_co: [128]
+    warps: [4]
+    stages: [3]
+
+
+
+conv_dgrad_2d_stride1:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32, 64]
+    block_ci: [16, 32]
+    block_co: [32, 64, 128]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [64]
+    block_ci: [32]
+    block_co: [64, 128]
+    warps: [8]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [128]
+    block_ci: [16]
+    block_co: [64, 128]
+    warps: [4]
+    stages: [3]
+
+conv_dgrad_2d_1x1:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [64]
+    block_ci: [32]
+    block_co: [128]
+    warps: [8]
+    stages: [3]
+
+conv_dgrad_2d_1x1_strided:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32]
+    block_ci: [32]
+    block_co: [128]
+    warps: [4]
+    stages: [3]
+
+
+conv_dgrad_2d_stride2_pad1_3x3_mci:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32, 64]
+    block_ci: [16, 32]
+    block_co: [64, 128]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [64]
+    block_ci: [32]
+    block_co: [64, 128]
+    warps: [8]
+    stages: [3]
+
+
+conv_dgrad_2d_stride2_pad1_3x3_packed:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32]
+    block_ci: [64]
+    block_co: [128]
+    warps: [4]
+    stages: [3]
+
+conv_dgrad_2d_stride2_pad1_3x3_packed_mci:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [16, 32, 64]
+    block_ci: [32, 64]
+    block_co: [128, 256]
+    warps: [4]
+    stages: [3]
+
+conv_dgrad_2d_stride2_pad1_3x3_tile2w:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32]
+    block_ci: [64]
+    block_co: [128]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32]
+    block_ci: [64]
+    block_co: [64, 128]
+    warps: [4]
+    stages: [2]
+
+
+conv_dgrad_2d_stride2_pad1_3x3_tile4:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [32]
+    block_ci: [16, 32]
+    block_co: [64, 128]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [64]
+    block_ci: [4, 8]
+    block_co: [64, 128]
+    warps: [4]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [64]
+    block_ci: [8, 16]
+    block_co: [64]
+    warps: [4]
+    stages: [2, 3]
+
+
+conv_fprop_3d:
+  # Hopper NCDHW implicit-GEMM candidates for the two benchmark 3D families.
+  - META:
+      BLOCK_OC: 16
+      BLOCK_M: 16
+      BLOCK_K: 16
+    num_warps: 2
+    num_stages: 2
+  - META:
+      BLOCK_OC: 16
+      BLOCK_M: 32
+      BLOCK_K: 16
+    num_warps: 2
+    num_stages: 2
+  - META:
+      BLOCK_OC: 16
+      BLOCK_M: 32
+      BLOCK_K: 32
+    num_warps: 4
+    num_stages: 3
+  - META:
+      BLOCK_OC: 16
+      BLOCK_M: 64
+      BLOCK_K: 32
+    num_warps: 4
+    num_stages: 3
+  - META:
+      BLOCK_OC: 16
+      BLOCK_M: 64
+      BLOCK_K: 64
+    num_warps: 4
+    num_stages: 3
+  - META:
+      BLOCK_OC: 16
+      BLOCK_M: 128
+      BLOCK_K: 32
+    num_warps: 4
+    num_stages: 3
+
+conv_dgrad_3d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [16, 32, 64]
+    block_ci: [16]
+    block_co: [16]
+    warps: [1, 2, 4]
+    stages: [1, 2, 3]
+
+conv_dgrad_3d_pad1_3x3_fp32_ci8_dot:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+      num_warps: warps
+      num_stages: stages
+    block_m: [16]
+    warps: [2]
+    stages: [1]
+
+conv_dgrad_3d_packed:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_M: block_m
+        BLOCK_CI: block_ci
+        BLOCK_CO: block_co
+      num_warps: warps
+      num_stages: stages
+    block_m: [8]
+    block_ci: [16]
+    block_co: [32]
+    warps: [1]
+    stages: [1, 3]
+
+conv_wgrad_1d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_CO: block_co
+        BLOCK_CI: block_ci
+        BLOCK_M: block_m
+      num_warps: warps
+      num_stages: stages
+    # Fallback only. Exact benchmark 1D shapes use code-level fused / direct CIK paths.
+    block_co: [8, 16, 32, 64]
+    block_ci: [16, 32, 64]
+    block_m: [64, 128, 256]
+    warps: [4, 8]
+    stages: [3]
+
+conv_wgrad_2d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_CO: block_co
+        BLOCK_CI: block_ci
+        BLOCK_M: block_m
+      num_warps: warps
+      num_stages: stages
+    # Fallback for non-exact 3x3 shapes. Exact benchmark 3x3 shapes are dispatched manually, including non-contiguous output variants.
+    block_co: [8, 16, 32]
+    block_ci: [16, 32, 64]
+    block_m: [64, 128, 256]
+    warps: [4, 8]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_CO: block_co
+        BLOCK_CI: block_ci
+        BLOCK_M: block_m
+      num_warps: warps
+      num_stages: stages
+    block_co: [32]
+    block_ci: [32]
+    block_m: [128, 256]
+    warps: [4, 8]
+    stages: [3]
+
+conv_wgrad_2d_1x1:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_CO: block_co
+        BLOCK_CI: block_ci
+        BLOCK_M: block_m
+      num_warps: warps
+      num_stages: stages
+    # Fallback. Exact benchmark 1x1 uses the hand-dispatched nodiv split / atomic path.
+    block_co: [16, 32, 64]
+    block_ci: [16, 32, 64]
+    block_m: [128, 256]
+    warps: [4, 8]
+    stages: [3]
+
+  - gen: true
+    param_map:
+      META:
+        BLOCK_CO: block_co
+        BLOCK_CI: block_ci
+        BLOCK_M: block_m
+      num_warps: warps
+      num_stages: stages
+    block_co: [32]
+    block_ci: [32]
+    block_m: [256]
+    warps: [4]
+    stages: [3]
+
+conv_wgrad_3d:
+  - gen: true
+    param_map:
+      META:
+        BLOCK_CO: block_co
+        BLOCK_CI: block_ci
+        BLOCK_M: block_m
+      num_warps: warps
+      num_stages: stages
+    # Fallback. Exact benchmark 3D shapes use exact CIK/atomic/strided direct kernels in the Python dispatcher.
+    block_co: [8, 16, 32]
+    block_ci: [8, 16]
+    block_m: [64, 128]
+    warps: [2, 4]
+    stages: [2, 3]

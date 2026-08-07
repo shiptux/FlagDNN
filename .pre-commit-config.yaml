@@ -1,3 +1,5 @@
+# Python hooks apply only to Triton kernels, codegen, backend compilers and tools.
+exclude: '^(build[^/]*/|\.venv/|\.git/)'
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
@@ -5,21 +7,29 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+      - id: check-json
       - id: check-added-large-files
 
   - repo: https://github.com/psf/black
     rev: 24.8.0
     hooks:
       - id: black
+        args: [--line-length=79]
 
   - repo: https://github.com/pycqa/flake8
     rev: 7.1.0
     hooks:
       - id: flake8
 
-  # 可选：类型检查
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.0
     hooks:
       - id: mypy
-        args: [--no-strict-optional, --ignore-missing-imports]
+        # Triton kernel sources are compiler DSL, and platform compiler.py
+        # consumes dynamically typed request schemas. Keep mypy focused on
+        # ordinary Python control-plane code until those APIs are typed.
+        exclude: '^(backends/[^/]+/(compiler\.py|kernels/)|kernels/common/)'
+        args:
+          - --no-strict-optional
+          - --ignore-missing-imports
+          - --explicit-package-bases

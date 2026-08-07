@@ -1,0 +1,44 @@
+name: Native Core Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure platform-neutral core
+        run: |
+          cmake -S . -B build-core -G Ninja \
+            -DFLAGDNN_BACKENDS= \
+            -DFLAGDNN_BUILD_TESTS=ON \
+            -DFLAGDNN_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build-core -j2
+
+      - name: Test
+        run: ctest --test-dir build-core -j2 --output-on-failure
+
+      - name: Install SDK
+        run: cmake --install build-core --prefix build-core/install
+
+      - name: Configure installed SDK consumer
+        run: |
+          cmake -S tests/core/installed_consumer -B build-consumer -G Ninja \
+            -DCMAKE_PREFIX_PATH="$PWD/build-core/install"
+
+      - name: Build installed SDK consumer
+        run: cmake --build build-consumer -j2
+
+      - name: Test installed SDK headers and link interface
+        run: ctest --test-dir build-consumer -j2 --output-on-failure
