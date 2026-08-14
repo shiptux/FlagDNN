@@ -13,7 +13,9 @@ if(NOT result EQUAL 0)
 endif()
 
 foreach(forbidden IN ITEMS
-        libcuda libcudnn libcublas libascendcl libacl libpython libtorch)
+        libcuda libcudnn libcublas
+        libamdhip64 libgalaxyhip libhipdnn libMIOpen librocblas libhipblas
+        libascendcl libacl libpython libtorch)
   if(dynamic_section MATCHES "Shared library:.*${forbidden}")
     message(FATAL_ERROR
       "platform-neutral binary unexpectedly depends on ${forbidden}:\n${dynamic_section}")

@@ -16,29 +16,26 @@
 
 namespace flagdnn::native {
 
-void validate_graph_structure(const GraphSpec& graph) {
+void validate_graph_structure(const GraphSpec &graph) {
   (void)validate_graph(graph);
-  for (const OperationSpec& operation : graph.operations) {
+  for (const OperationSpec &operation : graph.operations) {
     (void)lower_operation(operation);
   }
 }
 
-std::unique_ptr<Executable> build_graph_executable(
-    RuntimeContext& context,
-    const GraphSpec& graph,
-    const flagdnnBuildOptions_t& options) {
+std::unique_ptr<Executable>
+build_graph_executable(RuntimeContext &context, const GraphSpec &graph,
+                       const flagdnnBuildOptions_t &options) {
   if (!graph.finalized) {
     throw ApiError(FLAGDNN_STATUS_NOT_INITIALIZED,
                    "graph must be finalized before it is built");
   }
   if (graph.operations.empty()) {
-    throw ApiError(FLAGDNN_STATUS_INVALID_VALUE,
-                   "cannot build an empty graph");
+    throw ApiError(FLAGDNN_STATUS_INVALID_VALUE, "cannot build an empty graph");
   }
   if (graph.operations.size() > 1024) {
-    throw ApiError(
-        FLAGDNN_STATUS_NOT_SUPPORTED,
-        "graph operation count exceeds the executable limit");
+    throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
+                   "graph operation count exceeds the executable limit");
   }
   if ((options.flags & ~FLAGDNN_BUILD_OPTION_FLAGS_ALL) != 0) {
     throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
@@ -48,28 +45,30 @@ std::unique_ptr<Executable> build_graph_executable(
   const ValidatedGraph validated = validate_graph(graph);
   std::vector<LoweredOperation> lowered;
   lowered.reserve(graph.operations.size());
-  for (const OperationSpec& operation : graph.operations) {
+  for (const OperationSpec &operation : graph.operations) {
     lowered.push_back(lower_operation(operation));
   }
   const std::string graph_ir =
       make_graph_ir(context, graph, options, lowered, validated);
+
   ArtifactPackage artifact = prepare_artifact_package(context, graph_ir);
   std::unique_ptr<BackendExecutable> backend_executable;
   try {
+    const std::unique_lock environment_lock(process_environment_mutex());
     backend_executable = context.create_executable(artifact);
-  } catch (const ApiError& error) {
+  } catch (const ApiError &error) {
     if (!artifact.cache_hit ||
         error.status() != FLAGDNN_STATUS_COMPILATION_FAILED) {
       throw;
     }
     invalidate_cached_artifact(artifact);
     artifact = prepare_artifact_package(context, graph_ir);
+    const std::unique_lock environment_lock(process_environment_mutex());
     backend_executable = context.create_executable(artifact);
   }
-  return std::make_unique<Executable>(
-      std::move(backend_executable),
-      validated.external_binding_uids,
-      graph.operations.size());
+  return std::make_unique<Executable>(std::move(backend_executable),
+                                      validated.external_binding_uids,
+                                      graph.operations.size());
 }
 
-}  // namespace flagdnn::native
+} // namespace flagdnn::native

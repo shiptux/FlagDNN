@@ -179,7 +179,7 @@ file(GLOB_RECURSE common_test_sources
 foreach(entry IN LISTS common_test_sources)
   file(READ "${entry}" source)
   if(source MATCHES
-     "#[ \\t]*include[ \\t]*(<cuda|<cudnn|<acl|\"(platforms|validation|backends)/)")
+     "#[ \\t]*include[ \\t]*(<cuda|<cudnn|<hip|<hipdnn|<acl|\"(platforms|validation|backends)/)")
     message(FATAL_ERROR
       "Platform SDK/include leaked into platform-neutral test source: ${entry}")
   endif()
@@ -237,7 +237,7 @@ file(GLOB_RECURSE common_benchmark_sources
 foreach(entry IN LISTS common_benchmark_sources)
   file(READ "${entry}" source)
   if(source MATCHES
-     "#[ \\t]*include[ \\t]*(<cuda|<cudnn|<acl|\"(platforms|validation|backends)/)")
+     "#[ \\t]*include[ \\t]*(<cuda|<cudnn|<hip|<hipdnn|<acl|\"(platforms|validation|backends)/)")
     message(FATAL_ERROR
       "Platform SDK/include leaked into platform-neutral benchmark source: ${entry}")
   endif()
@@ -248,7 +248,7 @@ file(GLOB_RECURSE lowering_sources
   "${SOURCE_ROOT}/src/graph/lowering/*.hpp")
 foreach(entry IN LISTS lowering_sources)
   file(READ "${entry}" source)
-  if(source MATCHES "(nvidia|NVIDIA|cuda|CUDA|ascend|Ascend|iluvatar|Iluvatar)")
+  if(source MATCHES "(nvidia|NVIDIA|cuda|CUDA|hygon|Hygon|hipdnn|hipDNN|ascend|Ascend|iluvatar|Iluvatar)")
     message(FATAL_ERROR
       "Platform detail leaked into graph lowering: ${entry}")
   endif()

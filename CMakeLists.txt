@@ -22,17 +22,21 @@ option(FLAGDNN_WARNINGS_AS_ERRORS "Treat native compiler warnings as errors" OFF
 
 set(FLAGDNN_BACKENDS "nvidia"
     CACHE STRING "Semicolon-separated backend plugins to build")
-set(FLAGDNN_DEFAULT_BACKEND "nvidia"
-    CACHE STRING "Backend selected by FLAGDNN_BACKEND_AUTO")
+set(FLAGDNN_DEFAULT_BACKEND "auto"
+    CACHE STRING
+    "Backend selected by FLAGDNN_BACKEND_AUTO; auto prefers NVIDIA when built")
+set_property(CACHE FLAGDNN_DEFAULT_BACKEND PROPERTY STRINGS
+  auto ${FLAGDNN_BACKENDS})
+include(cmake/FlagDNNDefaultBackend.cmake)
+flagdnn_resolve_default_backend(
+  FLAGDNN_EFFECTIVE_DEFAULT_BACKEND
+  "${FLAGDNN_BACKENDS}"
+  "${FLAGDNN_DEFAULT_BACKEND}")
 set(FLAGDNN_EXECUTION_ENGINE "libtriton_jit"
     CACHE STRING
     "Default execution engine: libtriton_jit or external_artifact")
 set_property(CACHE FLAGDNN_EXECUTION_ENGINE PROPERTY STRINGS
   libtriton_jit external_artifact)
-if(NOT FLAGDNN_DEFAULT_BACKEND MATCHES "^[a-z][a-z0-9_]*$")
-  message(FATAL_ERROR
-    "FLAGDNN_DEFAULT_BACKEND must match [a-z][a-z0-9_]*")
-endif()
 if(NOT FLAGDNN_EXECUTION_ENGINE STREQUAL "libtriton_jit" AND
    NOT FLAGDNN_EXECUTION_ENGINE STREQUAL "external_artifact")
   message(FATAL_ERROR

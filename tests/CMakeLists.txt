@@ -95,7 +95,7 @@ add_test(NAME core.backend_dependency_boundary
   COMMAND "${CMAKE_COMMAND}"
     "-DBACKEND_LIBRARY=$<TARGET_FILE:flagdnn_backend_contract>"
     "-DBACKEND_NAME=contract"
-    "-DFORBIDDEN_DEPENDENCIES=libcuda;libcudnn;libcublas;libascendcl;libacl;libpython;libtorch"
+    "-DFORBIDDEN_DEPENDENCIES=libcuda;libcudnn;libcublas;libamdhip64;libgalaxyhip;libhipdnn;libMIOpen;librocblas;libhipblas;libascendcl;libacl;libpython;libtorch"
     -P "${PROJECT_SOURCE_DIR}/cmake/VerifyBackendPlugin.cmake")
 
 add_executable(flagdnn_contract_compiler
@@ -171,3 +171,15 @@ add_test(NAME core.test_architecture
   COMMAND "${CMAKE_COMMAND}"
     "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/VerifyPerOperatorTestLayout.cmake")
+
+if(FLAGDNN_CODEGEN_PYTHON)
+  add_test(NAME core.run_tests_contract
+    COMMAND "${FLAGDNN_CODEGEN_PYTHON}"
+      "${PROJECT_SOURCE_DIR}/cmake/VerifyRunTestsContract.py"
+      "${PROJECT_SOURCE_DIR}/tools/run_tests.py")
+endif()
+
+add_test(NAME core.default_backend_contract
+  COMMAND "${CMAKE_COMMAND}"
+    "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/DefaultBackendContract.cmake")

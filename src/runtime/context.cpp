@@ -10,6 +10,8 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -35,13 +37,19 @@
 #endif
 
 namespace flagdnn::native {
+
+std::shared_mutex &process_environment_mutex() {
+  static std::shared_mutex mutex;
+  return mutex;
+}
+
 namespace {
 
 const int runtime_context_anchor = 0;
 
-std::string configured_value(const char* environment_name,
-                             const char* compiled_default) {
-  const char* environment_value = std::getenv(environment_name);
+std::string configured_value(const char *environment_name,
+                             const char *compiled_default) {
+  const char *environment_value = std::getenv(environment_name);
   if (environment_value != nullptr && environment_value[0] != '\0') {
     return environment_value;
   }
@@ -75,35 +83,38 @@ CompilerDefaults default_compiler_config() {
 
 std::string selected_backend_name(flagdnnBackend_t backend) {
   switch (backend) {
-    case FLAGDNN_BACKEND_AUTO: {
-      const char* configured = std::getenv("FLAGDNN_BACKEND");
-      const std::string selected =
-          configured == nullptr || configured[0] == '\0'
-              ? FLAGDNN_DEFAULT_BACKEND
-              : configured;
-      if (selected.empty()) {
-        throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
-                       "no default backend is configured; set "
-                       "FLAGDNN_BACKEND or create the handle by name");
-      }
-      return selected;
+  case FLAGDNN_BACKEND_AUTO: {
+    const char *configured = std::getenv("FLAGDNN_BACKEND");
+    const std::string selected = configured == nullptr || configured[0] == '\0'
+                                     ? FLAGDNN_DEFAULT_BACKEND
+                                     : configured;
+    if (selected.empty()) {
+      throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
+                     "no default backend is configured; set "
+                     "FLAGDNN_BACKEND or create the handle by name");
     }
-    case FLAGDNN_BACKEND_NVIDIA:
-      return "nvidia";
+    return selected;
+  }
+  case FLAGDNN_BACKEND_NVIDIA:
+    return "nvidia";
   }
   throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
                  "requested backend enum is not supported");
 }
 
-}  // namespace
+} // namespace
 
 RuntimeContext::RuntimeContext(flagdnnBackend_t backend,
                                std::int32_t device_ordinal)
-    : RuntimeContext(selected_backend_name(backend), device_ordinal) {}
+    : device_ordinal_(device_ordinal) {
+  const std::shared_lock environment_lock(process_environment_mutex());
+  initialize(selected_backend_name(backend));
+}
 
 RuntimeContext::RuntimeContext(std::string backend_name,
                                std::int32_t device_ordinal)
     : device_ordinal_(device_ordinal) {
+  const std::shared_lock environment_lock(process_environment_mutex());
   initialize(std::move(backend_name));
 }
 
@@ -128,8 +139,8 @@ void RuntimeContext::initialize(std::string backend_name) {
   }
 
   const CompilerDefaults compiler_defaults = default_compiler_config();
-  compiler_executable_ = configured_value(
-      "FLAGDNN_COMPILER_EXECUTABLE", compiler_defaults.executable.c_str());
+  compiler_executable_ = configured_value("FLAGDNN_COMPILER_EXECUTABLE",
+                                          compiler_defaults.executable.c_str());
   compiler_ = configured_value("FLAGDNN_CODEGEN_COMPILER",
                                compiler_defaults.entry.c_str());
   std::string cache = configured_value("FLAGDNN_CACHE_DIRECTORY", "");
@@ -143,8 +154,7 @@ void RuntimeContext::initialize(std::string backend_name) {
 
 RuntimeContext::~RuntimeContext() = default;
 
-void RuntimeContext::set_compiler(std::string executable,
-                                  std::string compiler,
+void RuntimeContext::set_compiler(std::string executable, std::string compiler,
                                   std::string cache_directory) {
   if (executable.empty() || compiler.empty() || cache_directory.empty()) {
     throw ApiError(
@@ -152,16 +162,24 @@ void RuntimeContext::set_compiler(std::string executable,
         "compiler executable, compiler path, and cache directory must be "
         "nonempty");
   }
-  compiler_executable_ = std::move(executable);
-  compiler_ = std::move(compiler);
-  cache_directory_ = std::move(cache_directory);
+  // Parse the path before taking the lock or mutating any member. A path
+  // allocation failure must leave the complete previous configuration and
+  // its memoized identity intact.
+  std::filesystem::path parsed_cache_directory(std::move(cache_directory));
+  const std::lock_guard lock(compiler_configuration_mutex_);
+  compiler_executable_.swap(executable);
+  compiler_.swap(compiler);
+  cache_directory_.swap(parsed_cache_directory);
+  compiler_identity_snapshot_.clear();
+  compiler_identity_dependencies_.clear();
+  compiler_identity_dependencies_snapshot_.clear();
+  compiler_identity_.clear();
 }
 
-std::unique_ptr<BackendExecutable> RuntimeContext::create_executable(
-    const ArtifactPackage& artifact) const {
-  return backend_context_->create_executable(artifact.build_request,
-                                             artifact.directory,
-                                             artifact.request_sha256);
+std::unique_ptr<BackendExecutable>
+RuntimeContext::create_executable(const ArtifactPackage &artifact) const {
+  return backend_context_->create_executable(
+      artifact.build_request, artifact.directory, artifact.request_sha256);
 }
 
-}  // namespace flagdnn::native
+} // namespace flagdnn::native
