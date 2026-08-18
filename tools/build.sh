@@ -19,6 +19,7 @@ Options:
   --build-dir PATH          Build directory (default: build/<backend>)
   --build-type TYPE         CMake build type (default: Release)
   --backends LIST           Semicolon-separated backends (default: nvidia)
+  --default-backend NAME    Backend selected by AUTO (default: auto; NVIDIA preferred)
   --engine NAME             libtriton_jit or external_artifact
   --python PATH             Python used by the external platform compiler
   --generator NAME          CMake generator (default: Ninja)
@@ -33,6 +34,7 @@ Options:
 
 Environment defaults:
   FLAGDNN_BUILD_DIR, FLAGDNN_BUILD_TYPE, FLAGDNN_BACKENDS,
+  FLAGDNN_DEFAULT_BACKEND,
   FLAGDNN_EXECUTION_ENGINE, FLAGDNN_CODEGEN_PYTHON,
   FLAGDNN_BUILD_TESTS, FLAGDNN_BUILD_BENCHMARKS,
   FLAGDNN_WARNINGS_AS_ERRORS, FLAGDNN_BUILD_JOBS.
@@ -85,6 +87,7 @@ fi
 build_directory="${FLAGDNN_BUILD_DIR:-}"
 build_type="${FLAGDNN_BUILD_TYPE:-Release}"
 backends="${FLAGDNN_BACKENDS:-nvidia}"
+default_backend="${FLAGDNN_DEFAULT_BACKEND:-auto}"
 execution_engine="${FLAGDNN_EXECUTION_ENGINE:-libtriton_jit}"
 codegen_python="${FLAGDNN_CODEGEN_PYTHON:-}"
 generator="${FLAGDNN_CMAKE_GENERATOR:-Ninja}"
@@ -113,6 +116,11 @@ while [[ $# -gt 0 ]]; do
       if [[ "${backends}" == "none" ]]; then
         backends=""
       fi
+      shift 2
+      ;;
+    --default-backend)
+      require_value "$@"
+      default_backend="${2}"
       shift 2
       ;;
     --engine)
@@ -179,6 +187,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "${jobs}" =~ ^[1-9][0-9]*$ ]] || fail "--jobs must be a positive integer"
+[[ "${build_type}" =~ ^[A-Za-z0-9_.+-]+$ ]] ||
+  fail "--build-type must contain a CMake configuration name"
 case "${execution_engine}" in
   libtriton_jit|external_artifact) ;;
   *) fail "--engine must be libtriton_jit or external_artifact" ;;
@@ -186,7 +196,7 @@ esac
 
 command -v cmake >/dev/null 2>&1 ||
   fail "cmake was not found; install CMake 3.23 or newer"
-if [[ "${generator}" == "Ninja" ]]; then
+if [[ "${generator}" == Ninja* ]]; then
   command -v ninja >/dev/null 2>&1 ||
     fail "ninja was not found; install Ninja or select another generator"
 fi
@@ -204,6 +214,27 @@ fi
 
 if [[ "${backends}" == "none" ]]; then
   backends=""
+fi
+if [[ -z "${default_backend}" ]]; then
+  default_backend="auto"
+fi
+[[ "${default_backend}" == "auto" ||
+   "${default_backend}" =~ ^[a-z][a-z0-9_]*$ ]] ||
+  fail "--default-backend must be a backend name"
+effective_default_backend="${default_backend}"
+if [[ "${default_backend}" == "auto" ]]; then
+  if [[ -n "${backends}" ]]; then
+    effective_default_backend="${backends%%;*}"
+    IFS=';' read -r -a configured_backends <<< "${backends}"
+    for configured_backend in "${configured_backends[@]}"; do
+      if [[ "${configured_backend}" == "nvidia" ]]; then
+        effective_default_backend=nvidia
+        break
+      fi
+    done
+  else
+    effective_default_backend="nvidia"
+  fi
 fi
 if [[ -z "${build_directory}" ]]; then
   if [[ -z "${backends}" ]]; then
@@ -223,14 +254,24 @@ cmake_arguments=(
   -S "${source_directory}"
   -B "${build_directory}"
   -G "${generator}"
-  "-DCMAKE_BUILD_TYPE=${build_type}"
   "-DFLAGDNN_BACKENDS=${backends}"
+  "-DFLAGDNN_DEFAULT_BACKEND=${default_backend}"
   "-DFLAGDNN_BUILD_TESTS=${build_tests}"
   "-DFLAGDNN_BUILD_BENCHMARKS=${build_benchmarks}"
   "-DFLAGDNN_EXECUTION_ENGINE=${execution_engine}"
   "-DFLAGDNN_CODEGEN_PYTHON=${codegen_python}"
   "-DFLAGDNN_WARNINGS_AS_ERRORS=${warnings_as_errors}"
 )
+
+multi_config_generator=0
+case "${generator}" in
+  "Ninja Multi-Config"|Xcode|Visual\ Studio*)
+    multi_config_generator=1
+    ;;
+esac
+if (( ! multi_config_generator )); then
+  cmake_arguments+=("-DCMAKE_BUILD_TYPE=${build_type}")
+fi
 
 cmake_arguments+=("${extra_cmake_arguments[@]}")
 
@@ -239,6 +280,7 @@ echo "  source:      ${source_directory}"
 echo "  build:       ${build_directory}"
 echo "  type:        ${build_type}"
 echo "  backends:    ${backends:-<none>}"
+echo "  default:     ${effective_default_backend} (policy: ${default_backend})"
 echo "  engine:      ${execution_engine}"
 echo "  tests:       ${build_tests}"
 echo "  benchmarks:  ${build_benchmarks}"
@@ -246,20 +288,34 @@ echo "  python:      ${codegen_python}"
 echo "  jobs:        ${jobs}"
 
 cmake "${cmake_arguments[@]}"
+printf '%s\n' "${build_type}" > \
+  "${build_directory}/.flagdnn-build-config"
 
 if (( configure_only )); then
   echo "Configured FlagDNN at ${build_directory}"
   exit 0
 fi
 
-cmake --build "${build_directory}" --parallel "${jobs}"
+build_arguments=(
+  --build "${build_directory}"
+  --parallel "${jobs}"
+)
+if (( multi_config_generator )); then
+  build_arguments+=(--config "${build_type}")
+fi
+cmake "${build_arguments[@]}"
+
+configuration_subdirectory=""
+if (( multi_config_generator )); then
+  configuration_subdirectory="/${build_type}"
+fi
 
 echo "FlagDNN build completed"
-echo "  core library: ${build_directory}/src/libflagdnn.so"
+echo "  core library: ${build_directory}/src${configuration_subdirectory}/libflagdnn.so"
 if [[ -n "${backends}" ]]; then
   IFS=';' read -r -a backend_names <<< "${backends}"
   for backend_name in "${backend_names[@]}"; do
-    echo "  ${backend_name} plugin: ${build_directory}/backends/${backend_name}/libflagdnn_backend_${backend_name}.so"
+    echo "  ${backend_name} plugin: ${build_directory}/backends/${backend_name}${configuration_subdirectory}/libflagdnn_backend_${backend_name}.so"
   done
 fi
-echo "Install with: tools/install.sh --build-dir ${build_directory}"
+echo "Install with: tools/install.sh --build-dir ${build_directory} --config ${build_type}"

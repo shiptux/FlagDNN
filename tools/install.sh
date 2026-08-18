@@ -16,9 +16,11 @@ Usage:
   tools/install.sh [options]
 
 Options:
-  --build-dir PATH   Configured build directory (default: build/<backend>)
+  --build-dir PATH   Configured build directory (default: the sole build/*
+                     tree, or build/nvidia when none exists yet)
   --prefix PATH      Install prefix (default: <build-dir>/install)
-  --config NAME      Multi-config build configuration (default: Release)
+  --config NAME      Build configuration (default: the configuration recorded
+                     by tools/build.sh, or Release)
   --strip            Strip installed binaries
   -h, --help         Show this help
 
@@ -27,6 +29,7 @@ Environment defaults:
   FLAGDNN_BACKENDS.
 
 Examples:
+  tools/build.sh --backends hygon
   tools/install.sh
   FLAGDNN_BACKENDS=ascend tools/install.sh
   tools/install.sh --prefix /opt/flagdnn
@@ -55,8 +58,12 @@ absolute_from_source() {
 
 build_directory="${FLAGDNN_BUILD_DIR:-}"
 install_prefix="${FLAGDNN_INSTALL_PREFIX:-}"
-build_config="${FLAGDNN_BUILD_TYPE:-Release}"
-selected_backends="${FLAGDNN_BACKENDS:-nvidia}"
+build_config="${FLAGDNN_BUILD_TYPE:-}"
+selected_backends="${FLAGDNN_BACKENDS:-}"
+backends_explicit=0
+if [[ "${FLAGDNN_BACKENDS+x}" == "x" ]]; then
+  backends_explicit=1
+fi
 strip_install=0
 
 while [[ $# -gt 0 ]]; do
@@ -92,34 +99,68 @@ done
 
 command -v cmake >/dev/null 2>&1 ||
   fail "cmake was not found; install CMake 3.23 or newer"
+command -v realpath >/dev/null 2>&1 ||
+  fail "realpath was not found; it is required for safe prefix validation"
 
 if [[ "${selected_backends}" == "none" ]]; then
   selected_backends=""
 fi
 if [[ -z "${build_directory}" ]]; then
-  if [[ -z "${selected_backends}" ]]; then
-    build_directory="build/core"
-  elif [[ "${selected_backends}" == *";"* ]]; then
-    build_directory="build/multi"
-  elif [[ "${selected_backends}" =~ ^[a-z][a-z0-9_]*$ ]]; then
-    build_directory="build/${selected_backends}"
+  if (( backends_explicit )); then
+    if [[ -z "${selected_backends}" ]]; then
+      build_directory="build/core"
+    elif [[ "${selected_backends}" == *";"* ]]; then
+      build_directory="build/multi"
+    elif [[ "${selected_backends}" =~ ^[a-z][a-z0-9_]*$ ]]; then
+      build_directory="build/${selected_backends}"
+    else
+      fail "FLAGDNN_BACKENDS must contain CMake backend names"
+    fi
   else
-    fail "FLAGDNN_BACKENDS must contain CMake backend names"
+    shopt -s nullglob
+    configured_caches=("${source_directory}"/build/*/CMakeCache.txt)
+    shopt -u nullglob
+    if (( ${#configured_caches[@]} == 1 )); then
+      build_directory="${configured_caches[0]%/CMakeCache.txt}"
+    elif (( ${#configured_caches[@]} == 0 )); then
+      build_directory="build/nvidia"
+    else
+      fail "multiple configured build trees found; pass --build-dir or set FLAGDNN_BACKENDS"
+    fi
   fi
 fi
 
-build_directory="$(absolute_from_source "${build_directory}")"
+build_directory="$(realpath -m -- "$(absolute_from_source "${build_directory}")")"
 if [[ -z "${install_prefix}" ]]; then
   install_prefix="${build_directory}/install"
 else
   install_prefix="$(absolute_from_source "${install_prefix}")"
 fi
+install_prefix="$(realpath -m -- "${install_prefix}")"
+
+if [[ -z "${build_config}" && -f "${build_directory}/CMakeCache.txt" ]]; then
+  while IFS= read -r cache_line; do
+    case "${cache_line}" in
+      CMAKE_BUILD_TYPE:*=*)
+        build_config="${cache_line#*=}"
+        break
+        ;;
+    esac
+  done < "${build_directory}/CMakeCache.txt"
+fi
+if [[ -z "${build_config}" ]]; then
+  configuration_marker="${build_directory}/.flagdnn-build-config"
+  if [[ -f "${configuration_marker}" ]]; then
+    IFS= read -r build_config < "${configuration_marker}" || true
+  fi
+fi
+build_config="${build_config:-Release}"
+[[ "${build_config}" =~ ^[A-Za-z0-9_.+-]+$ ]] ||
+  fail "invalid build configuration '${build_config}'"
 
 [[ "${install_prefix}" != "/" ]] || fail "refusing to install into /"
 [[ -f "${build_directory}/CMakeCache.txt" ]] ||
   fail "${build_directory} is not configured; run tools/build.sh first"
-[[ -e "${build_directory}/src/libflagdnn.so" ]] ||
-  fail "libflagdnn.so is missing; compile the configured build first"
 
 install_arguments=(
   --install "${build_directory}"
@@ -133,11 +174,84 @@ fi
 echo "Installing FlagDNN"
 echo "  build:  ${build_directory}"
 echo "  prefix: ${install_prefix}"
+echo "  config: ${build_config}"
 
+install_manifest="${build_directory}/install_manifest.txt"
+# CMake rewrites this file for each non-component install. Remove any previous
+# manifest first so a successful command that fails to generate its own
+# manifest cannot make validation consume stale paths from an earlier prefix.
+rm -f -- "${install_manifest}"
 cmake "${install_arguments[@]}"
 
+[[ -f "${install_manifest}" && ! -L "${install_manifest}" ]] ||
+  fail "cmake --install did not generate a fresh install manifest"
+[[ -d "${install_prefix}" ]] ||
+  fail "cmake --install did not create the requested install prefix"
+canonical_install_prefix="$(realpath -e -- "${install_prefix}")"
+
+installed_headers=""
+installed_libraries=""
+installed_cmake=""
+installed_core=""
+installed_targets_configuration=""
+installed_resources=""
+manifest_line=0
+while IFS= read -r installed_file || [[ -n "${installed_file}" ]]; do
+  ((manifest_line += 1))
+  [[ -n "${installed_file}" ]] || continue
+  if ! canonical_installed_file="$(realpath -e -- "${installed_file}")"; then
+    fail "install manifest entry ${manifest_line} does not exist: ${installed_file}"
+  fi
+  case "${canonical_installed_file}" in
+    "${canonical_install_prefix}"/*)
+      ;;
+    *)
+      fail "install manifest entry ${manifest_line} is outside the requested prefix: ${installed_file}"
+      ;;
+  esac
+  [[ -f "${canonical_installed_file}" ]] || continue
+  case "${canonical_installed_file}" in
+    */libflagdnn.so|*/libflagdnn.so.*|*/libflagdnn.dylib|*/libflagdnn.*.dylib|*/flagdnn.dll)
+      installed_core="${canonical_installed_file}"
+      installed_libraries="${canonical_installed_file%/*}"
+      ;;
+    */flagdnn/flagdnn.h)
+      installed_headers="${canonical_installed_file%/flagdnn/flagdnn.h}"
+      ;;
+    */cmake/FlagDNN/FlagDNNConfig.cmake)
+      installed_cmake="${canonical_installed_file%/FlagDNNConfig.cmake}"
+      ;;
+    */cmake/FlagDNN/FlagDNNTargets-*.cmake)
+      installed_targets_configuration="${canonical_installed_file}"
+      ;;
+    */share/flagdnn/kernels/registry.json)
+      installed_resources="${canonical_installed_file%/kernels/registry.json}"
+      ;;
+  esac
+done < "${install_manifest}"
+
+[[ -n "${installed_headers}" ]] ||
+  fail "installation did not produce the public FlagDNN headers"
+[[ -n "${installed_core}" ]] ||
+  fail "installation did not produce the FlagDNN core library"
+[[ -n "${installed_cmake}" ]] ||
+  fail "installation did not produce the FlagDNN CMake package"
+[[ -n "${installed_targets_configuration}" ]] ||
+  fail "installation did not produce a configuration-specific CMake target"
+[[ -n "${installed_resources}" ]] ||
+  fail "installation did not produce the FlagDNN kernel registry"
+
 echo "FlagDNN SDK installed"
-echo "  headers:   ${install_prefix}/include"
-echo "  libraries: ${install_prefix}/lib"
-echo "  CMake:     ${install_prefix}/lib/cmake/FlagDNN"
-echo "  resources: ${install_prefix}/share/flagdnn"
+echo "  prefix:    ${install_prefix}"
+if [[ -n "${installed_headers}" ]]; then
+  echo "  headers:   ${installed_headers}"
+fi
+if [[ -n "${installed_libraries}" ]]; then
+  echo "  libraries: ${installed_libraries}"
+fi
+if [[ -n "${installed_cmake}" ]]; then
+  echo "  CMake:     ${installed_cmake}"
+fi
+if [[ -n "${installed_resources}" ]]; then
+  echo "  resources: ${installed_resources}"
+fi

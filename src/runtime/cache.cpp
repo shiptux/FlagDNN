@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -25,7 +26,7 @@ namespace {
 std::atomic<std::uint64_t> cache_temporary_counter{0};
 
 void quarantine_artifact_directory(
-    const std::filesystem::path& artifact_directory) {
+    const std::filesystem::path &artifact_directory) {
   std::error_code exists_error;
   if (!std::filesystem::exists(artifact_directory, exists_error)) {
     if (exists_error) {
@@ -68,17 +69,15 @@ bool is_sha256(std::string_view value) {
   return true;
 }
 
-void write_file(const std::filesystem::path& path,
-                std::string_view contents,
-                const char* description) {
+void write_file(const std::filesystem::path &path, std::string_view contents,
+                const char *description) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   if (!output) {
     throw ApiError(FLAGDNN_STATUS_COMPILATION_FAILED,
                    std::string("cannot create ") + description + ": " +
                        path.string());
   }
-  output.write(contents.data(),
-               static_cast<std::streamsize>(contents.size()));
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
   output.close();
   if (!output) {
     throw ApiError(FLAGDNN_STATUS_COMPILATION_FAILED,
@@ -88,7 +87,7 @@ void write_file(const std::filesystem::path& path,
 }
 
 class TemporaryPath {
- public:
+public:
   TemporaryPath(std::filesystem::path path, bool directory)
       : path_(std::move(path)), directory_(directory) {}
 
@@ -105,13 +104,13 @@ class TemporaryPath {
 
   void release() noexcept { released_ = true; }
 
- private:
+private:
   std::filesystem::path path_;
   bool directory_ = false;
   bool released_ = false;
 };
 
-std::string read_cached_identity(const std::filesystem::path& path) {
+std::string read_cached_identity(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
     return {};
@@ -122,8 +121,7 @@ std::string read_cached_identity(const std::filesystem::path& path) {
     throw ApiError(FLAGDNN_STATUS_COMPILATION_FAILED,
                    "compiler identity index is invalid");
   }
-  while (!value.empty() &&
-         (value.back() == '\n' || value.back() == '\r')) {
+  while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
     value.pop_back();
   }
   return is_sha256(value) ? value : std::string{};
@@ -143,13 +141,12 @@ std::string make_build_request(std::string_view graph_ir,
   return result;
 }
 
-void publish_active_identity(const std::filesystem::path& path,
+void publish_active_identity(const std::filesystem::path &path,
                              std::string_view identity) {
   const std::uint64_t serial = cache_temporary_counter.fetch_add(1);
   const std::filesystem::path temporary =
-      path.parent_path() /
-      (".active_identity.tmp." + std::to_string(getpid()) + "." +
-       std::to_string(serial));
+      path.parent_path() / (".active_identity.tmp." + std::to_string(getpid()) +
+                            "." + std::to_string(serial));
   TemporaryPath cleanup(temporary, false);
   write_file(temporary, std::string(identity) + "\n", "identity index");
 
@@ -163,10 +160,12 @@ void publish_active_identity(const std::filesystem::path& path,
   cleanup.release();
 }
 
-}  // namespace
+} // namespace
 
-ArtifactPackage prepare_artifact_package(RuntimeContext& context,
+ArtifactPackage prepare_artifact_package(RuntimeContext &context,
                                          std::string_view graph_ir) {
+  const std::lock_guard compiler_configuration_lock(
+      context.compiler_configuration_mutex_);
   if (context.cache_directory().empty()) {
     throw ApiError(FLAGDNN_STATUS_COMPILATION_FAILED,
                    "compiler cache directory is not configured");
@@ -179,7 +178,7 @@ ArtifactPackage prepare_artifact_package(RuntimeContext& context,
   const std::string graph_hash = sha256(graph_ir);
   const std::filesystem::path graph_cache_directory =
       context.cache_directory() / context.backend_name() /
-      context.target_fingerprint() / graph_hash;
+      context.target_fingerprint() / context.execution_engine() / graph_hash;
   std::error_code error;
   std::filesystem::create_directories(graph_cache_directory, error);
   if (error) {
@@ -193,16 +192,14 @@ ArtifactPackage prepare_artifact_package(RuntimeContext& context,
   std::string compiler_identity;
   bool compiler_available = true;
   try {
-    compiler_identity =
-        query_compiler_identity(context, graph_cache_directory);
-  } catch (const ApiError& identity_error) {
+    compiler_identity = query_compiler_identity(context, graph_cache_directory);
+  } catch (const CompilerExecutableUnavailable &identity_error) {
     compiler_available = false;
     compiler_identity = read_cached_identity(active_identity_path);
     if (compiler_identity.empty()) {
-      throw ApiError(
-          FLAGDNN_STATUS_COMPILATION_FAILED,
-          std::string(identity_error.what()) +
-              "; no identity-indexed cached artifact is available");
+      throw ApiError(FLAGDNN_STATUS_COMPILATION_FAILED,
+                     std::string(identity_error.what()) +
+                         "; no identity-indexed cached artifact is available");
     }
   }
 
@@ -218,10 +215,7 @@ ArtifactPackage prepare_artifact_package(RuntimeContext& context,
     if (compiler_available) {
       publish_active_identity(active_identity_path, compiler_identity);
     }
-    return {artifact_directory,
-            request_hash,
-            compiler_identity,
-            build_request,
+    return {artifact_directory, request_hash, compiler_identity, build_request,
             true};
   }
   if (!compiler_available) {
@@ -252,6 +246,21 @@ ArtifactPackage prepare_artifact_package(RuntimeContext& context,
   compile_external_artifact(context, request_path, temporary);
   validate_artifact_directory(temporary);
 
+  // The provider identity covers kernels, tuning data, compiler helpers, and
+  // the selected JIT. Force a fresh endpoint snapshot immediately before
+  // publication and reject every observable dependency change. Providers and
+  // embedding applications must additionally keep those resources immutable
+  // throughout compilation: endpoint snapshots cannot observe an external
+  // A->B->A mutation that is completely restored between the two queries.
+  const std::string identity_after_compile =
+      query_compiler_identity(context, graph_cache_directory, true);
+  if (identity_after_compile != compiler_identity) {
+    throw ApiError(
+        FLAGDNN_STATUS_COMPILATION_FAILED,
+        "compiler identity changed during artifact compilation; refusing "
+        "to publish the temporary artifact");
+  }
+
   error.clear();
   std::filesystem::rename(temporary, artifact_directory, error);
   bool cache_hit = false;
@@ -268,14 +277,11 @@ ArtifactPackage prepare_artifact_package(RuntimeContext& context,
   }
 
   publish_active_identity(active_identity_path, compiler_identity);
-  return {artifact_directory,
-          request_hash,
-          compiler_identity,
-          build_request,
+  return {artifact_directory, request_hash, compiler_identity, build_request,
           cache_hit};
 }
 
-void invalidate_cached_artifact(const ArtifactPackage& artifact) {
+void invalidate_cached_artifact(const ArtifactPackage &artifact) {
   if (!artifact.cache_hit) {
     throw ApiError(FLAGDNN_STATUS_INTERNAL_ERROR,
                    "cannot invalidate a newly compiled artifact");
@@ -283,4 +289,4 @@ void invalidate_cached_artifact(const ArtifactPackage& artifact) {
   quarantine_artifact_directory(artifact.directory);
 }
 
-}  // namespace flagdnn::native
+} // namespace flagdnn::native

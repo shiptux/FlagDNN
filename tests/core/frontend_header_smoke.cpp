@@ -1,6 +1,7 @@
 #include <flagdnn_frontend.h>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -531,6 +532,25 @@ int main() {
   const auto sliced = layout_graph.slice(layout_input, slice_attributes);
   sliced->set_uid(33).set_output(true);
 
+  fe::graph::Graph extreme_slice_graph;
+  extreme_slice_graph.set_io_data_type(fe::DataType_t::FLOAT)
+      .set_intermediate_data_type(fe::DataType_t::FLOAT)
+      .set_compute_data_type(fe::DataType_t::FLOAT);
+  const auto extreme_slice_input = extreme_slice_graph.tensor(
+      fe::graph::Tensor_attributes()
+          .set_uid(34)
+          .set_dim({2})
+          .set_stride({1}));
+  const auto extreme_sliced = extreme_slice_graph.slice(
+      extreme_slice_input,
+      fe::graph::Slice_attributes()
+          .set_slices({{0, 2}})
+          .set_strides({std::numeric_limits<std::int64_t>::max()}));
+  extreme_sliced->set_uid(35).set_output(true);
+  if (extreme_slice_graph.validate().is_bad()) {
+    return 3;
+  }
+
   bool invalid_reshape_rejected = false;
   try {
     (void)layout_graph.reshape(
@@ -676,6 +696,11 @@ int main() {
                      std::vector<std::int64_t>({2, 2, 2}) &&
                  sliced->get_stride() ==
                      std::vector<std::int64_t>({12, 4, 2}) &&
+                 extreme_sliced->get_dim() ==
+                     std::vector<std::int64_t>({1}) &&
+                 extreme_sliced->get_stride() ==
+                     std::vector<std::int64_t>(
+                         {std::numeric_limits<std::int64_t>::max()}) &&
                  invalid_reshape_rejected &&
                  invalid_transpose_rejected &&
                  invalid_slice_rejected &&

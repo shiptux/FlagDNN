@@ -2135,8 +2135,9 @@ class Graph {
   }
 
   /*
-   * This span overload is the zero-allocation execution path used by native
-   * tests and performance-sensitive callers.
+   * This span adapter does not build a temporary binding vector. The selected
+   * backend may still use bounded temporaries permitted by execution contract
+   * revision 2.
    */
   [[nodiscard]] error_t execute(
       const Handle& handle,
@@ -2163,9 +2164,10 @@ class Graph {
   }
 
   /*
-   * UID-to-pointer variant packs mirror cuDNN Frontend.  Callers that need
-   * allocation-free launches should retain flagdnnBinding_t storage and use
-   * the span overload above.
+   * UID-to-pointer variant packs mirror cuDNN Frontend. This overload may
+   * allocate host storage while packing UIDs; callers can retain
+   * flagdnnBinding_t storage and use the span overload to avoid that adapter
+   * allocation.
    */
   [[nodiscard]] error_t execute(
       const Handle& handle,
@@ -3021,7 +3023,8 @@ class Graph {
           limit > input_dimensions[axis] || step <= 0) {
         throw std::invalid_argument("slice range or stride is invalid");
       }
-      dimensions[axis] = (limit - start + step - 1) / step;
+      const std::int64_t span = limit - start;
+      dimensions[axis] = 1 + (span - 1) / step;
       if (input_strides[axis] >
           std::numeric_limits<std::int64_t>::max() / step) {
         throw std::overflow_error("slice output stride overflowed");

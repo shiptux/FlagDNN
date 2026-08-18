@@ -33,6 +33,7 @@ class BenchmarkExecutable {
  public:
   virtual ~BenchmarkExecutable() = default;
 
+  virtual void prepare(std::span<const flagdnnBinding_t>, flagdnnStream_t) {}
   [[nodiscard]] virtual std::size_t workspace_size() const noexcept = 0;
   virtual void execute(std::span<const flagdnnBinding_t> bindings,
                        void* workspace,

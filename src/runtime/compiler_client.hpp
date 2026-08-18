@@ -10,15 +10,15 @@ namespace flagdnn::native {
 
 class RuntimeContext;
 
-std::string query_compiler_identity(
-    RuntimeContext& context,
-    const std::filesystem::path& graph_cache_directory);
+std::string
+query_compiler_identity(RuntimeContext &context,
+                        const std::filesystem::path &graph_cache_directory,
+                        bool force_refresh = false);
 
-void compile_external_artifact(
-    const RuntimeContext& context,
-    const std::filesystem::path& request,
-    const std::filesystem::path& output_directory);
+void compile_external_artifact(const RuntimeContext &context,
+                               const std::filesystem::path &request,
+                               const std::filesystem::path &output_directory);
 
-}  // namespace flagdnn::native
+} // namespace flagdnn::native
 
-#endif  // FLAGDNN_RUNTIME_COMPILER_CLIENT_HPP_
+#endif // FLAGDNN_RUNTIME_COMPILER_CLIENT_HPP_

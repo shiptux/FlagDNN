@@ -2,7 +2,7 @@ include_guard(GLOBAL)
 
 function(flagdnn_add_backend_plugin backend_name)
   set(options INSTALL)
-  set(one_value_arguments)
+  set(one_value_arguments ABI_VERSION)
   set(multi_value_arguments SOURCES INCLUDE_DIRECTORIES LINK_LIBRARIES)
   cmake_parse_arguments(
     FLAGDNN_BACKEND
@@ -20,6 +20,18 @@ function(flagdnn_add_backend_plugin backend_name)
   if(NOT FLAGDNN_BACKEND_SOURCES)
     message(FATAL_ERROR
       "flagdnn_add_backend_plugin(${backend_name}) requires SOURCES")
+  endif()
+  if(NOT FLAGDNN_BACKEND_ABI_VERSION)
+    set(FLAGDNN_BACKEND_ABI_VERSION 2)
+  endif()
+  if(NOT FLAGDNN_BACKEND_ABI_VERSION MATCHES "^[23]$")
+    message(FATAL_ERROR
+      "FlagDNN backend ABI version must be 2 or 3")
+  endif()
+  if(FLAGDNN_BACKEND_ABI_VERSION EQUAL 3 AND
+     NOT backend_name STREQUAL "ascend")
+    message(FATAL_ERROR
+      "FlagDNN backend ABI version 3 is currently reserved for ascend")
   endif()
 
   set(target "flagdnn_backend_${backend_name}")
@@ -43,16 +55,23 @@ function(flagdnn_add_backend_plugin backend_name)
   flagdnn_enable_warnings("${target}")
 
   if(UNIX AND NOT APPLE)
+    if(FLAGDNN_BACKEND_ABI_VERSION EQUAL 2)
+      set(_flagdnn_backend_version_script
+        "${PROJECT_SOURCE_DIR}/cmake/flagdnn_backend.map")
+    else()
+      set(_flagdnn_backend_version_script
+        "${PROJECT_SOURCE_DIR}/cmake/flagdnn_backend_v3.map")
+    endif()
     target_link_options("${target}" PRIVATE
-      "LINKER:--version-script=${PROJECT_SOURCE_DIR}/cmake/flagdnn_backend.map")
+      "LINKER:--version-script=${_flagdnn_backend_version_script}")
     set_property(TARGET "${target}" APPEND PROPERTY LINK_DEPENDS
-      "${PROJECT_SOURCE_DIR}/cmake/flagdnn_backend.map")
+      "${_flagdnn_backend_version_script}")
   endif()
   set_target_properties("${target}" PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES
-    VERSION 2.0.0
-    SOVERSION 2)
+    VERSION "${FLAGDNN_BACKEND_ABI_VERSION}.0.0"
+    SOVERSION "${FLAGDNN_BACKEND_ABI_VERSION}")
 
   if(FLAGDNN_BACKEND_INSTALL)
     install(TARGETS "${target}"

@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "ownership": "platform",
+  "backend": "hygon",
+  "kernels": [
+    {
+      "operations": ["min", "max"],
+      "provider": "hygon_triton",
+      "source": "binary_minmax.py",
+      "functions": [
+        "binary_contiguous_kernel",
+        "binary_strided_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "binary",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "identity",
+      "provider": "hygon_triton",
+      "source": "unary.py",
+      "functions": [
+        "unary_pointwise_contiguous_kernel",
+        "identity_packed_contiguous_kernel",
+        "unary_pointwise_strided_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "identity",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operations": [
+        "reduction_sum",
+        "reduction_avg",
+        "reduction_mul"
+      ],
+      "provider": "hygon_triton",
+      "source": "reduction.py",
+      "functions": [
+        "reduction_2d_kernel",
+        "reduction_3d_kernel",
+        "reduction_3d_small_extent_kernel",
+        "reduction_strided_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "reduction",
+        "key": "output_elements",
+        "strategy": "reduction",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "layernorm",
+      "provider": "hygon_triton",
+      "source": "normalization.py",
+      "functions": [
+        "layer_norm_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "layer_norm",
+        "key": "normalized_elements",
+        "strategy": "fixed_grid",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "batchnorm",
+      "provider": "hygon_triton",
+      "source": "normalization.py",
+      "functions": [
+        "batch_norm_nchw_kernel",
+        "batch_norm_kernel"
+      ],
+      "tuning": {
+        "source": "normalization.yaml",
+        "table": "batch_norm",
+        "key": "channels",
+        "strategy": "fixed_grid",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operations": [
+        "conv2d_fprop",
+        "convolution_fprop"
+      ],
+      "provider": "hygon_triton",
+      "source": "convolution.py",
+      "functions": [
+        "conv1d_gemm_kernel",
+        "conv2d_spatial_nchw_kernel",
+        "conv3d_spatial_ncdhw_m_kernel",
+        "hygon_conv2d_im2col_nchw_kernel",
+        "hygon_conv2d_fprop_stride2_low_ci_nchw_kernel",
+        "hygon_conv2d_fprop_standard_3x3_nchw_kernel",
+        "hygon_conv2d_fprop_im2col_kernel",
+        "hygon_conv2d_fprop_yolo_x_p5_gemm_kernel",
+        "hygon_conv2d_fprop_1x1_nchw_kernel"
+      ],
+      "tuning": {
+        "source": "convolution.yaml",
+        "table": "conv_fprop",
+        "key": "n_outputs",
+        "strategy": "convolution",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "convolution_dgrad",
+      "provider": "hygon_triton",
+      "source": "convolution.py",
+      "functions": [
+        "conv_dgrad_nd_kernel",
+        "hygon_conv_dgrad2d_1x1_nchw_kernel",
+        "hygon_conv_dgrad2d_stride1_kernel",
+        "hygon_conv_dgrad2d_stride2_contribution_gemm_kernel",
+        "hygon_conv_dgrad2d_stride2_block_pointer_gemm_kernel",
+        "hygon_conv_dgrad2d_stride2_contribution_col2im_kernel",
+        "hygon_conv_dgrad2d_stride2_parity_kernel",
+        "hygon_conv_dgrad2d_exact_3x3_s1_gemm_kernel",
+        "hygon_conv_dgrad2d_exact_3x3_s1_col2im_kernel"
+      ],
+      "tuning": {
+        "source": "convolution.yaml",
+        "table": "conv_dgrad",
+        "key": "n_outputs",
+        "strategy": "convolution",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "convolution_wgrad",
+      "provider": "hygon_triton",
+      "source": "convolution.py",
+      "functions": [
+        "conv_wgrad_nd_kernel",
+        "hygon_conv2d_im2col_nchw_kernel",
+        "hygon_conv_wgrad2d_im2row_kernel",
+        "hygon_conv_wgrad2d_rowmajor_kernel",
+        "hygon_conv_wgrad2d_p5_block_ptr_kernel",
+        "hygon_conv_wgrad2d_im2col_kernel",
+        "hygon_conv_wgrad2d_im2col_split_kernel",
+        "hygon_conv_wgrad2d_stem_split_kernel",
+        "hygon_conv_wgrad2d_multirow_split_kernel",
+        "hygon_conv_wgrad2d_direct_split_kernel",
+        "hygon_conv_wgrad2d_1x1_split_kernel",
+        "hygon_conv_wgrad2d_reduce_kernel"
+      ],
+      "tuning": {
+        "source": "convolution.yaml",
+        "table": "conv_wgrad",
+        "key": "n_outputs",
+        "strategy": "convolution",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    }
+  ]
+}

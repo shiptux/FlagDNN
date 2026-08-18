@@ -19,6 +19,7 @@ add_library(flagdnn SHARED
   runtime/compiler_client.cpp
   runtime/context.cpp
   runtime/executable.cpp
+  runtime/json.cpp
   runtime/sha256.cpp)
 add_library(FlagDNN::flagdnn ALIAS flagdnn)
 
@@ -28,7 +29,7 @@ target_compile_definitions(flagdnn PRIVATE
   FLAGDNN_DEFAULT_COMPILER_EXECUTABLE="${FLAGDNN_CODEGEN_PYTHON}"
   FLAGDNN_DEFAULT_CODEGEN_COMPILER="${FLAGDNN_CODEGEN_COMPILER}"
   FLAGDNN_INSTALLED_RESOURCE_RELATIVE="${FLAGDNN_RESOURCE_PATH_FROM_LIBRARY}"
-  FLAGDNN_DEFAULT_BACKEND="${FLAGDNN_DEFAULT_BACKEND}"
+  FLAGDNN_DEFAULT_BACKEND="${FLAGDNN_EFFECTIVE_DEFAULT_BACKEND}"
   FLAGDNN_DEFAULT_EXECUTION_ENGINE="${FLAGDNN_EXECUTION_ENGINE}")
 target_include_directories(flagdnn
   PUBLIC
@@ -52,7 +53,7 @@ set_target_properties(flagdnn PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN YES
   VERSION ${PROJECT_VERSION}
-  SOVERSION ${PROJECT_VERSION_MAJOR})
+  SOVERSION 1)
 
 install(TARGETS flagdnn
   EXPORT FlagDNNTargets
