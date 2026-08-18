@@ -13,6 +13,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -61,7 +62,7 @@ struct CompilerDefaults {
   std::string entry;
 };
 
-CompilerDefaults default_compiler_config() {
+CompilerDefaults default_compiler_config(std::string_view backend_name) {
   if (FLAGDNN_INSTALLED_RESOURCE_RELATIVE[0] != '\0') {
     Dl_info information{};
     if (dladdr(&runtime_context_anchor, &information) != 0 &&
@@ -73,7 +74,13 @@ CompilerDefaults default_compiler_config() {
               .lexically_normal();
       std::error_code error;
       if (std::filesystem::is_regular_file(candidate, error) && !error) {
-        return {"python3", candidate.string()};
+        // Ascend embeds and identity-checks the configure-time CPython ABI.
+        // Existing backends retain the relocatable installed-SDK behavior of
+        // resolving python3 from PATH.
+        const char* executable = backend_name == "ascend"
+                                     ? FLAGDNN_DEFAULT_COMPILER_EXECUTABLE
+                                     : "python3";
+        return {executable, candidate.string()};
       }
     }
   }
@@ -138,9 +145,10 @@ void RuntimeContext::initialize(std::string backend_name) {
         "FLAGDNN_EXECUTION_ENGINE must be external_artifact or libtriton_jit");
   }
 
-  const CompilerDefaults compiler_defaults = default_compiler_config();
-  compiler_executable_ = configured_value("FLAGDNN_COMPILER_EXECUTABLE",
-                                          compiler_defaults.executable.c_str());
+  const CompilerDefaults compiler_defaults =
+      default_compiler_config(backend_name_);
+  compiler_executable_ = configured_value(
+      "FLAGDNN_COMPILER_EXECUTABLE", compiler_defaults.executable.c_str());
   compiler_ = configured_value("FLAGDNN_CODEGEN_COMPILER",
                                compiler_defaults.entry.c_str());
   std::string cache = configured_value("FLAGDNN_CACHE_DIRECTORY", "");

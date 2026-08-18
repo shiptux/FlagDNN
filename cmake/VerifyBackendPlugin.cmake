@@ -4,6 +4,14 @@ endif()
 if(NOT DEFINED BACKEND_NAME OR BACKEND_NAME STREQUAL "")
   message(FATAL_ERROR "BACKEND_NAME is missing")
 endif()
+if(NOT DEFINED BACKEND_ABI_VERSION)
+  set(BACKEND_ABI_VERSION 2)
+endif()
+if(NOT BACKEND_ABI_VERSION MATCHES "^[23]$")
+  message(FATAL_ERROR "BACKEND_ABI_VERSION must be 2 or 3")
+endif()
+set(_flagdnn_backend_getter
+  "flagdnnBackendGetApiV${BACKEND_ABI_VERSION}")
 
 find_program(READELF_EXECUTABLE readelf REQUIRED)
 find_program(NM_EXECUTABLE nm REQUIRED)
@@ -16,6 +24,11 @@ execute_process(
 if(NOT dynamic_result EQUAL 0)
   message(FATAL_ERROR
     "readelf failed for ${BACKEND_NAME} backend: ${dynamic_error}")
+endif()
+if(NOT dynamic_section MATCHES
+   "Library soname:.*libflagdnn_backend_${BACKEND_NAME}\\.so\\.${BACKEND_ABI_VERSION}\\]")
+  message(FATAL_ERROR
+    "${BACKEND_NAME} backend does not use plugin ABI v${BACKEND_ABI_VERSION} SONAME:\n${dynamic_section}")
 endif()
 
 foreach(required IN LISTS REQUIRED_DEPENDENCIES)
@@ -47,15 +60,15 @@ foreach(line IN LISTS symbol_lines)
     continue()
   endif()
   string(REGEX MATCH "[^ \t]+$" symbol "${line}")
-  if(NOT symbol MATCHES "^FLAGDNN_BACKEND_2$" AND
+  if(NOT symbol MATCHES "^FLAGDNN_BACKEND_${BACKEND_ABI_VERSION}$" AND
      NOT symbol MATCHES
-       "^flagdnnBackendGetApiV2@@FLAGDNN_BACKEND_2$")
+       "^${_flagdnn_backend_getter}@@FLAGDNN_BACKEND_${BACKEND_ABI_VERSION}$")
     message(FATAL_ERROR
       "${BACKEND_NAME} backend exports unexpected symbol '${symbol}':\n${symbols}")
   endif()
 endforeach()
 if(NOT symbols MATCHES
-   "flagdnnBackendGetApiV2@@FLAGDNN_BACKEND_2")
+   "${_flagdnn_backend_getter}@@FLAGDNN_BACKEND_${BACKEND_ABI_VERSION}")
   message(FATAL_ERROR
     "${BACKEND_NAME} backend does not export its versioned ABI entry:\n${symbols}")
 endif()

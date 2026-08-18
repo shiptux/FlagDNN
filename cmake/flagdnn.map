@@ -1,6 +1,74 @@
 FLAGDNN_0.1 {
   global:
-    flagdnn*;
+    flagdnnBuildExecutable;
+    flagdnnCreate;
+    flagdnnCreateGraph;
+    flagdnnCreateOperationDescriptor;
+    flagdnnCreateOperationDescriptorByName;
+    flagdnnCreateTensorDescriptor;
+    flagdnnCreateWithBackend;
+    flagdnnCreateWithBackendName;
+    flagdnnDestroy;
+    flagdnnDestroyExecutable;
+    flagdnnDestroyGraph;
+    flagdnnDestroyOperationDescriptor;
+    flagdnnDestroyTensorDescriptor;
+    flagdnnExecuteAsync;
+    flagdnnFinalizeGraph;
+    flagdnnFinalizeOperationDescriptor;
+    flagdnnGetBackendName;
+    flagdnnGetErrorString;
+    flagdnnGetExecutableOperationCount;
+    flagdnnGetExecutableWorkspaceSize;
+    flagdnnGetGraphOperationCount;
+    flagdnnGetLastErrorString;
+    flagdnnGetOperationDescriptorType;
+    flagdnnGetTargetFingerprint;
+    flagdnnGetTensorDescriptorAlignment;
+    flagdnnGetTensorDescriptorVirtual;
+    flagdnnGetTensorNdDescriptor;
+    flagdnnGetTensorSizeInBytes;
+    flagdnnGetVersion;
+    flagdnnGetVersionString;
+    flagdnnGraphAddOperation;
+    flagdnnSetAddOperationDescriptor;
+    flagdnnSetAddOperationDescriptorWithAlpha;
+    flagdnnSetCompilerConfig;
+    flagdnnSetConv2dFpropOperationDescriptor;
+    flagdnnSetConv2dFpropOperationDescriptorWithAsymmetricPadding;
+    flagdnnSetConvolutionFpropOperationDescriptor;
+    flagdnnSetGraphName;
+    flagdnnSetMatmulOperationDescriptor;
+    flagdnnSetOperationDescriptorAttributeBoolean;
+    flagdnnSetOperationDescriptorAttributeDouble;
+    flagdnnSetOperationDescriptorAttributeInt64;
+    flagdnnSetOperationDescriptorAttributeInt64Array;
+    flagdnnSetOperationDescriptorAttributeString;
+    flagdnnSetOperationDescriptorComputeDataType;
+    flagdnnSetOperationDescriptorInput;
+    flagdnnSetOperationDescriptorName;
+    flagdnnSetOperationDescriptorOutput;
+    flagdnnSetPointwiseBinaryOperationDescriptor;
+    flagdnnSetPointwiseBinaryOperationDescriptorWithAlpha;
+    flagdnnSetPointwiseTernaryOperationDescriptor;
+    flagdnnSetPointwiseUnaryOperationDescriptor;
+    flagdnnSetPointwiseUnaryOperationDescriptorWithAttributes;
+    flagdnnSetReductionOperationDescriptor;
+    flagdnnSetReductionSumOperationDescriptor;
+    flagdnnSetReluOperationDescriptor;
+    flagdnnSetSdpaBackwardOperationDescriptor;
+    flagdnnSetSdpaFp8BackwardOperationDescriptor;
+    flagdnnSetSdpaFp8OperationDescriptor;
+    flagdnnSetSdpaOperationDescriptor;
+    flagdnnSetTensorDescriptorAlignment;
+    flagdnnSetTensorDescriptorVirtual;
+    flagdnnSetTensorNdDescriptor;
+    flagdnnValidateGraph;
+};
+
+FLAGDNN_0.2 {
+  global:
+    flagdnnGetExecutionContractVersion;
   local:
     *;
-};
+} FLAGDNN_0.1;

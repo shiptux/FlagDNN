@@ -18,6 +18,27 @@ namespace flagdnn::native {
 
 class BackendExecutable;
 
+struct BackendApiDispatch {
+  const char* (*get_last_error)(void) = nullptr;
+  flagdnnBackendResult_t (*create_context)(std::int32_t, void**) = nullptr;
+  void (*destroy_context)(void*) = nullptr;
+  flagdnnBackendResult_t (*get_target_fingerprint)(
+      void*, char*, std::size_t, std::size_t*) = nullptr;
+  flagdnnBackendResult_t (*create_executable)(
+      void*,
+      const flagdnnBackendBuildInputV2*,
+      void**,
+      std::size_t*) = nullptr;
+  void (*destroy_executable)(void*) = nullptr;
+  flagdnnBackendResult_t (*execute)(
+      void*,
+      void*,
+      const flagdnnBackendBindingV2[],
+      std::size_t,
+      void*,
+      std::size_t) = nullptr;
+};
+
 class BackendLibrary {
  public:
   static std::shared_ptr<BackendLibrary> load(std::string backend_name);
@@ -28,17 +49,17 @@ class BackendLibrary {
   BackendLibrary& operator=(const BackendLibrary&) = delete;
 
   [[nodiscard]] const std::string& name() const noexcept { return name_; }
-  [[nodiscard]] const flagdnnBackendApiV2& api() const noexcept {
-    return *api_;
+  [[nodiscard]] const BackendApiDispatch& api() const noexcept {
+    return api_;
   }
 
  private:
   BackendLibrary(void* dynamic_library,
-                 const flagdnnBackendApiV2* api,
+                 BackendApiDispatch api,
                  std::string name);
 
   void* dynamic_library_ = nullptr;
-  const flagdnnBackendApiV2* api_ = nullptr;
+  BackendApiDispatch api_{};
   std::string name_;
 };
 

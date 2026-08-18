@@ -25,7 +25,7 @@ function(flagdnn_register_functional_suite)
   set(options)
   set(one_value_arguments
     PLATFORM ADAPTER_TARGET BACKEND_TARGET TIMEOUT BUILD_RPATH)
-  set(multi_value_arguments COMMAND_ARGS ENVIRONMENT LABELS)
+  set(multi_value_arguments COMMAND_ARGS ENVIRONMENT LABELS OPERATORS)
   cmake_parse_arguments(
     FLAGDNN_SUITE
     "${options}"
@@ -48,7 +48,20 @@ function(flagdnn_register_functional_suite)
     set(FLAGDNN_SUITE_TIMEOUT 600)
   endif()
 
-  foreach(operator IN LISTS FLAGDNN_FUNCTIONAL_OPERATORS)
+  set(_flagdnn_suite_operators ${FLAGDNN_SUITE_OPERATORS})
+  if(NOT _flagdnn_suite_operators)
+    set(_flagdnn_suite_operators ${FLAGDNN_FUNCTIONAL_OPERATORS})
+  endif()
+  list(REMOVE_DUPLICATES _flagdnn_suite_operators)
+
+  foreach(operator IN LISTS _flagdnn_suite_operators)
+    if(NOT operator IN_LIST FLAGDNN_FUNCTIONAL_OPERATORS)
+      message(FATAL_ERROR
+        "Functional operator ${operator} is not in FLAGDNN_FUNCTIONAL_OPERATORS")
+    endif()
+    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/tests/test_${operator}.cpp")
+      message(FATAL_ERROR "Functional operator ${operator} has no C++ entry")
+    endif()
     set(target "flagdnn_test_${FLAGDNN_SUITE_PLATFORM}_${operator}")
     add_executable("${target}"
       "${PROJECT_SOURCE_DIR}/tests/test_${operator}.cpp")
@@ -95,8 +108,14 @@ add_test(NAME core.backend_dependency_boundary
   COMMAND "${CMAKE_COMMAND}"
     "-DBACKEND_LIBRARY=$<TARGET_FILE:flagdnn_backend_contract>"
     "-DBACKEND_NAME=contract"
+    "-DBACKEND_ABI_VERSION=2"
     "-DFORBIDDEN_DEPENDENCIES=libcuda;libcudnn;libcublas;libamdhip64;libgalaxyhip;libhipdnn;libMIOpen;librocblas;libhipblas;libascendcl;libacl;libpython;libtorch"
     -P "${PROJECT_SOURCE_DIR}/cmake/VerifyBackendPlugin.cmake")
+
+add_test(NAME core.library_abi
+  COMMAND "${CMAKE_COMMAND}"
+    "-DCORE_LIBRARY=$<TARGET_FILE:flagdnn>"
+    -P "${PROJECT_SOURCE_DIR}/cmake/VerifyCoreLibrary.cmake")
 
 add_executable(flagdnn_contract_compiler
   core/contract_compiler.cpp
@@ -183,3 +202,12 @@ add_test(NAME core.default_backend_contract
   COMMAND "${CMAKE_COMMAND}"
     "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/DefaultBackendContract.cmake")
+
+if(Python3_Interpreter_FOUND AND "ascend" IN_LIST FLAGDNN_BACKENDS)
+  add_test(NAME core.ascend.compiler_contract
+    COMMAND "${Python3_EXECUTABLE}"
+      "${PROJECT_SOURCE_DIR}/tools/test_ascend_compiler_contract.py")
+  set_tests_properties(core.ascend.compiler_contract PROPERTIES
+    LABELS "core;ascend;no_device"
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()

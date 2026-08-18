@@ -26,11 +26,15 @@ int main(void) {
       FLAGDNN_BUILD_OPTION_FLAGS_ALL != UINT64_C(7)) {
     return 5;
   }
-  if (flagdnnGetVersion() != 100U) {
+  if (flagdnnGetVersion() != FLAGDNN_VERSION_NUMBER) {
     return 1;
   }
   if (strcmp(flagdnnGetVersionString(), FLAGDNN_VERSION_STRING) != 0) {
     return 2;
+  }
+  if (FLAGDNN_EXECUTION_CONTRACT_VERSION != 2U ||
+      flagdnnGetExecutionContractVersion() != 2U) {
+    return 7;
   }
   if (flagdnnGetErrorString(FLAGDNN_STATUS_SUCCESS) == NULL) {
     return 3;

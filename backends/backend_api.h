@@ -17,8 +17,15 @@
 extern "C" {
 #endif
 
-#define FLAGDNN_BACKEND_ABI_VERSION 2U
-#define FLAGDNN_BACKEND_GET_API_SYMBOL "flagdnnBackendGetApiV2"
+#define FLAGDNN_BACKEND_ABI_VERSION_V2 2U
+#define FLAGDNN_BACKEND_ABI_VERSION_V3 3U
+#define FLAGDNN_BACKEND_GET_API_V2_SYMBOL "flagdnnBackendGetApiV2"
+#define FLAGDNN_BACKEND_GET_API_V3_SYMBOL "flagdnnBackendGetApiV3"
+
+/* Existing backends keep the original v2 source contract by default. */
+#define FLAGDNN_BACKEND_ABI_VERSION FLAGDNN_BACKEND_ABI_VERSION_V2
+#define FLAGDNN_BACKEND_GET_API_SYMBOL FLAGDNN_BACKEND_GET_API_V2_SYMBOL
+#define FLAGDNN_BACKEND_EXECUTION_CONTRACT_VERSION 2U
 #define FLAGDNN_BACKEND_MAX_KERNEL_ARGUMENTS 4096U
 #define FLAGDNN_BACKEND_MAX_EXECUTION_STAGES 65536U
 #define FLAGDNN_BACKEND_MAX_TARGET_FINGERPRINT 128U
@@ -99,6 +106,62 @@ typedef struct flagdnnBackendApiV2 {
 } flagdnnBackendApiV2;
 
 typedef const flagdnnBackendApiV2* (*flagdnnBackendGetApiV2Function)(void);
+
+typedef struct flagdnnBackendApiV3 {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t execution_contract_version;
+  const char* backend_name;
+
+  /* Thread-local diagnostic, valid until the next plugin call in this thread. */
+  const char* (*get_last_error)(void);
+
+  flagdnnBackendResult_t (*create_context)(int32_t device_ordinal,
+                                           void** context);
+  void (*destroy_context)(void* context);
+
+  /*
+   * Writes a NUL-terminated, file-system-safe opaque target identifier.
+   * required_size includes the NUL terminator.
+   */
+  flagdnnBackendResult_t (*get_target_fingerprint)(
+      void* context,
+      char* buffer,
+      size_t buffer_size,
+      size_t* required_size);
+
+  /*
+   * Core keeps the creating context alive until destroy_executable returns.
+   * The executable may therefore safely retain backend-context resources.
+   * This is the build-time boundary: a backend may load modules and benchmark
+   * artifact variants here, but temporary streams/allocations must be released
+   * before returning.
+   */
+  flagdnnBackendResult_t (*create_executable)(
+      void* context,
+      const flagdnnBackendBuildInputV2* input,
+      void** executable,
+      size_t* workspace_size);
+  void (*destroy_executable)(void* executable);
+
+  /*
+   * Must not compile, autotune, or synchronize. Execution contract revision 2
+   * permits bounded, reclaimable host/device temporaries but no persistent or
+   * execution-count-dependent resource growth. Bindings, native_stream, and
+   * Graph workspace remain caller-owned until queued work completes. A
+   * nonzero workspace requirement uses a non-null, 256-byte-aligned base;
+   * when the requirement is zero, workspace and its alignment are ignored.
+   */
+  flagdnnBackendResult_t (*execute)(
+      void* executable,
+      void* native_stream,
+      const flagdnnBackendBindingV2 bindings[],
+      size_t binding_count,
+      void* workspace,
+      size_t workspace_size);
+} flagdnnBackendApiV3;
+
+typedef const flagdnnBackendApiV3* (*flagdnnBackendGetApiV3Function)(void);
 
 #ifdef __cplusplus
 }  /* extern "C" */

@@ -1,0 +1,6 @@
+FLAGDNN_BACKEND_3 {
+  global:
+    flagdnnBackendGetApiV3;
+  local:
+    *;
+};

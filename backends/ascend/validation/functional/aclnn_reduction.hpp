@@ -1,0 +1,43 @@
+/* Copyright (c) 2025-2026 BAAI. SPDX-License-Identifier: Apache-2.0 */
+
+#ifndef FLAGDNN_BACKENDS_ASCEND_VALIDATION_FUNCTIONAL_ACLNN_REDUCTION_HPP_
+#define FLAGDNN_BACKENDS_ASCEND_VALIDATION_FUNCTIONAL_ACLNN_REDUCTION_HPP_
+
+#include "common/reduction.hpp"
+
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+
+namespace flagdnn::testing {
+
+struct AclnnReductionPlan {
+  TestTensor input;
+  TestTensor output;
+  flagdnnReductionMode_t mode = FLAGDNN_REDUCTION_ADD;
+  std::int64_t axis = 0;
+  bool keep_dimensions = false;
+};
+
+class AclnnReductionUnsupportedError final : public std::runtime_error {
+ public:
+  AclnnReductionUnsupportedError(std::int32_t status, std::string message)
+      : std::runtime_error(std::move(message)), status_(status) {}
+
+  [[nodiscard]] std::int32_t status() const noexcept { return status_; }
+
+ private:
+  std::int32_t status_ = 0;
+};
+
+[[nodiscard]] bool aclnn_reduction_status_is_unsupported(
+    std::int32_t status, std::string_view message);
+
+[[nodiscard]] AclnnReductionPlan plan_aclnn_reduction(
+    const ReductionTestCase& test_case);
+
+}  // namespace flagdnn::testing
+
+#endif  // FLAGDNN_BACKENDS_ASCEND_VALIDATION_FUNCTIONAL_ACLNN_REDUCTION_HPP_

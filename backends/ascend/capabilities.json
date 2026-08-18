@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "backend": "ascend",
+  "launch_abi": "ltj_npu_raw_v1",
+  "supported_operations": [
+    "add", "sub", "mul", "div", "min", "max", "mod", "pow",
+    "cmp_eq", "cmp_neq", "cmp_gt", "cmp_ge", "cmp_lt", "cmp_le",
+    "logical_and", "logical_or", "sigmoid_backward",
+    "relu", "sqrt", "erf", "identity", "exp", "log", "neg", "abs",
+    "ceil", "cos", "floor", "rsqrt", "sin", "tan", "reciprocal",
+    "logical_not",
+    "sigmoid", "tanh", "elu",
+    "gelu", "softplus", "swish", "gelu_approx_tanh",
+    "binary_select",
+    "reshape", "transpose", "slice",
+    "reduction_sum", "reduction_avg", "reduction_mul",
+    "matmul", "convolution_fprop", "batchnorm_inference", "batchnorm",
+    "rmsnorm", "layernorm"
+  ],
+  "data_types": ["float32", "float16", "bfloat16", "boolean"],
+  "matmul": {
+    "data_types": ["float32", "float16", "bfloat16"],
+    "compute_data_type": "float32",
+    "minimum_rank": 2,
+    "maximum_rank": 8,
+    "maximum_batch_rank": 6,
+    "block_sizes": [16, 32]
+  },
+  "convolution_fprop": {
+    "data_types": ["float32", "float16", "bfloat16"],
+    "compute_data_type": "float32",
+    "minimum_spatial_rank": 1,
+    "maximum_spatial_rank": 3,
+    "block_sizes": [256, 128]
+  },
+  "batchnorm_inference": {
+    "x_y_data_types": ["float32", "float16", "bfloat16"],
+    "parameter_data_type": "float32",
+    "parameter_shape": "contiguous_numel_channels",
+    "compute_data_type": "float32",
+    "minimum_rank": 2,
+    "maximum_rank": 8,
+    "channel_axis": 1
+  },
+  "batchnorm": {
+    "x_y_scale_bias_data_types": ["float32", "float16", "bfloat16"],
+    "statistic_data_type": "float32",
+    "parameter_shape": "contiguous_numel_channels",
+    "compute_data_type": "float32",
+    "minimum_rank": 2,
+    "maximum_rank": 8,
+    "channel_axis": 1,
+    "input_count": 5,
+    "output_count": 5
+  },
+  "rmsnorm": {
+    "data_types": ["float32", "float16", "bfloat16"],
+    "compute_data_type": "float32",
+    "minimum_rank": 1,
+    "maximum_rank": 8,
+    "layout": "contiguous_suffix",
+    "statistic_data_type": "float32"
+  },
+  "layernorm": {
+    "data_types": ["float32", "float16", "bfloat16"],
+    "compute_data_type": "float32",
+    "minimum_rank": 1,
+    "maximum_rank": 8,
+    "layout": "contiguous_suffix",
+    "statistic_data_type": "float32",
+    "statistic_count": 2
+  },
+  "codegen_arches": [
+    "Ascend910B1",
+    "Ascend910B2",
+    "Ascend910B3",
+    "Ascend910B4",
+    "Ascend910_9362",
+    "Ascend910_9372",
+    "Ascend910_9381",
+    "Ascend910_9382",
+    "Ascend910_9391",
+    "Ascend910_9392",
+    "Ascend910_9579",
+    "Ascend910_9581",
+    "Ascend910_9589",
+    "Ascend910_9599"
+  ],
+  "max_rank": 8,
+  "workspace_alignment": 256,
+  "compile_options": {
+    "num_warps": [4],
+    "num_stages": [1]
+  },
+  "block_sizes": [256, 128],
+  "persistent_launch": {
+    "minimum_ai_core_count": 1,
+    "maximum_ai_core_count": 65535,
+    "workers_per_ai_core": 2
+  },
+  "grid": {
+    "max_dimension": 2147483647,
+    "max_product": 4294967295
+  }
+}

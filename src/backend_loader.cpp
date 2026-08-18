@@ -6,20 +6,36 @@
 
 #include <dlfcn.h>
 
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace flagdnn::native {
 namespace {
 
+static_assert(FLAGDNN_BACKEND_EXECUTION_CONTRACT_VERSION ==
+              FLAGDNN_EXECUTION_CONTRACT_VERSION);
+
 const int loader_anchor = 0;
+
+struct BackendLibraryRegistry {
+  std::mutex mutex;
+  std::unordered_map<std::string, std::shared_ptr<BackendLibrary>> libraries;
+};
+
+BackendLibraryRegistry& backend_library_registry() {
+  static BackendLibraryRegistry registry;
+  return registry;
+}
 
 struct DynamicLibraryGuard {
   ~DynamicLibraryGuard() {
@@ -136,11 +152,10 @@ void check_backend(const BackendLibrary& library,
   throw ApiError(public_status(result), message.str());
 }
 
-void validate_backend_api(const flagdnnBackendApiV2* api,
-                          std::string_view expected_name) {
-  if (api == nullptr || api->struct_size < sizeof(flagdnnBackendApiV2) ||
-      api->abi_version != FLAGDNN_BACKEND_ABI_VERSION ||
-      api->backend_name == nullptr ||
+template <typename Api>
+BackendApiDispatch validated_dispatch(const Api* api,
+                                      std::string_view expected_name) {
+  if (api->backend_name == nullptr ||
       std::string_view(api->backend_name) != expected_name ||
       api->get_last_error == nullptr || api->create_context == nullptr ||
       api->destroy_context == nullptr ||
@@ -150,6 +165,35 @@ void validate_backend_api(const flagdnnBackendApiV2* api,
     throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
                    "backend plugin has an incompatible ABI");
   }
+  return BackendApiDispatch{api->get_last_error,
+                            api->create_context,
+                            api->destroy_context,
+                            api->get_target_fingerprint,
+                            api->create_executable,
+                            api->destroy_executable,
+                            api->execute};
+}
+
+BackendApiDispatch validate_backend_api_v2(const flagdnnBackendApiV2* api,
+                                           std::string_view expected_name) {
+  if (api == nullptr || api->struct_size < sizeof(flagdnnBackendApiV2) ||
+      api->abi_version != FLAGDNN_BACKEND_ABI_VERSION_V2) {
+    throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
+                   "backend plugin has an incompatible ABI v2");
+  }
+  return validated_dispatch(api, expected_name);
+}
+
+BackendApiDispatch validate_backend_api_v3(const flagdnnBackendApiV3* api,
+                                           std::string_view expected_name) {
+  if (api == nullptr || api->struct_size < sizeof(flagdnnBackendApiV3) ||
+      api->abi_version != FLAGDNN_BACKEND_ABI_VERSION_V3 ||
+      api->execution_contract_version !=
+          FLAGDNN_BACKEND_EXECUTION_CONTRACT_VERSION) {
+    throw ApiError(FLAGDNN_STATUS_NOT_SUPPORTED,
+                   "backend plugin has an incompatible ABI v3 or execution contract");
+  }
+  return validated_dispatch(api, expected_name);
 }
 
 }  // namespace
@@ -162,9 +206,24 @@ std::shared_ptr<BackendLibrary> BackendLibrary::load(
         "backend name must match [a-z][a-z0-9_]{0,62}");
   }
 
+  const bool process_lifetime_library = backend_name == "ascend";
+  BackendLibraryRegistry& registry = backend_library_registry();
+  std::unique_lock<std::mutex> registry_lock(registry.mutex,
+                                             std::defer_lock);
+  if (process_lifetime_library) {
+    registry_lock.lock();
+    const auto loaded = registry.libraries.find(backend_name);
+    if (loaded != registry.libraries.end()) {
+      return loaded->second;
+    }
+  }
+
+  const std::uint32_t selected_abi_version =
+      backend_name == "ascend" ? FLAGDNN_BACKEND_ABI_VERSION_V3
+                               : FLAGDNN_BACKEND_ABI_VERSION_V2;
   const std::string library_name =
       "libflagdnn_backend_" + backend_name + ".so." +
-      std::to_string(FLAGDNN_BACKEND_ABI_VERSION);
+      std::to_string(selected_abi_version);
   std::string failures;
   DynamicLibraryGuard library;
   for (const std::filesystem::path& candidate :
@@ -187,30 +246,46 @@ std::shared_ptr<BackendLibrary> BackendLibrary::load(
         "loader path (" + failures + ")");
   }
 
+  const bool selected_v2 =
+      selected_abi_version == FLAGDNN_BACKEND_ABI_VERSION_V2;
+  const char* get_api_symbol =
+      selected_v2 ? FLAGDNN_BACKEND_GET_API_V2_SYMBOL
+                  : FLAGDNN_BACKEND_GET_API_V3_SYMBOL;
   dlerror();
-  void* symbol = dlsym(library.value, FLAGDNN_BACKEND_GET_API_SYMBOL);
+  void* symbol = dlsym(library.value, get_api_symbol);
   const char* symbol_error = dlerror();
   if (symbol_error != nullptr || symbol == nullptr) {
     throw ApiError(
         FLAGDNN_STATUS_NOT_SUPPORTED,
         backend_name + " backend plugin does not export " +
-            std::string(FLAGDNN_BACKEND_GET_API_SYMBOL) + ": " +
+            std::string(get_api_symbol) + ": " +
             (symbol_error == nullptr ? "symbol is null"
                                      : std::string(symbol_error)));
   }
-  const auto get_api =
-      reinterpret_cast<flagdnnBackendGetApiV2Function>(symbol);
-  const flagdnnBackendApiV2* api = get_api();
-  validate_backend_api(api, backend_name);
-  return std::shared_ptr<BackendLibrary>(new BackendLibrary(
-      library.release(), api, std::move(backend_name)));
+
+  BackendApiDispatch api;
+  if (selected_v2) {
+    const auto get_api =
+        reinterpret_cast<flagdnnBackendGetApiV2Function>(symbol);
+    api = validate_backend_api_v2(get_api(), backend_name);
+  } else {
+    const auto get_api =
+        reinterpret_cast<flagdnnBackendGetApiV3Function>(symbol);
+    api = validate_backend_api_v3(get_api(), backend_name);
+  }
+  auto result = std::shared_ptr<BackendLibrary>(new BackendLibrary(
+      library.release(), std::move(api), backend_name));
+  if (process_lifetime_library) {
+    registry.libraries.emplace(backend_name, result);
+  }
+  return result;
 }
 
 BackendLibrary::BackendLibrary(void* dynamic_library,
-                               const flagdnnBackendApiV2* api,
+                               BackendApiDispatch api,
                                std::string name)
     : dynamic_library_(dynamic_library),
-      api_(api),
+      api_(std::move(api)),
       name_(std::move(name)) {}
 
 BackendLibrary::~BackendLibrary() {
@@ -322,6 +397,11 @@ void BackendExecutable::execute(flagdnnStream_t stream,
       (workspace_size_ != 0 && workspace == nullptr)) {
     throw ApiError(FLAGDNN_STATUS_INVALID_VALUE,
                    "workspace is smaller than executable requirement");
+  }
+  if (workspace_size_ != 0 &&
+      reinterpret_cast<std::uintptr_t>(workspace) % 256U != 0U) {
+    throw ApiError(FLAGDNN_STATUS_INVALID_VALUE,
+                   "workspace base address is not 256-byte aligned");
   }
 
   static_assert(sizeof(flagdnnBinding_t) ==

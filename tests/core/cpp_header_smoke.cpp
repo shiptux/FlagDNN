@@ -39,6 +39,7 @@ static_assert(FLAGDNN_POINTWISE_BINARY_SELECT == 41);
 static_assert(FLAGDNN_POINTWISE_ATTRIBUTE_FLAGS_ALL == 63U);
 static_assert(FLAGDNN_BUILD_OPTION_AUTOTUNE == 4U);
 static_assert(FLAGDNN_BUILD_OPTION_FLAGS_ALL == 7U);
+static_assert(FLAGDNN_EXECUTION_CONTRACT_VERSION == 2U);
 
 int main() {
   const flagdnnPointwiseAttributes_t attributes =
@@ -63,7 +64,8 @@ int main() {
   flagdnn::Graph matmul_graph;
   matmul_graph.matmul(a, b, c);
   matmul_graph.validate();
-  return flagdnnGetVersion() == 100U &&
+  return flagdnnGetVersion() == FLAGDNN_VERSION_NUMBER &&
+                 flagdnnGetExecutionContractVersion() == 2U &&
                  attributes.struct_size == sizeof(attributes) &&
                  attributes.version ==
                      FLAGDNN_POINTWISE_ATTRIBUTES_VERSION &&

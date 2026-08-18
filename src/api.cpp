@@ -950,6 +950,10 @@ size_t flagdnnGetVersion(void) {
 
 const char* flagdnnGetVersionString(void) { return FLAGDNN_VERSION_STRING; }
 
+uint32_t flagdnnGetExecutionContractVersion(void) {
+  return FLAGDNN_EXECUTION_CONTRACT_VERSION;
+}
+
 const char* flagdnnGetErrorString(flagdnnStatus_t status) {
   switch (status) {
     case FLAGDNN_STATUS_SUCCESS:

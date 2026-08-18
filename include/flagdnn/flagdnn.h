@@ -22,6 +22,13 @@
 
 #include <flagdnn/version.h>
 
+/*
+ * Revision 2 permits bounded, reclaimable execution-engine temporaries while
+ * retaining the no-compile, no-autotune and no-synchronization guarantees of
+ * flagdnnExecuteAsync(). Binaries can query the linked runtime below.
+ */
+#define FLAGDNN_EXECUTION_CONTRACT_VERSION 2U
+
 #if defined(_WIN32)
 #if defined(FLAGDNN_BUILD_SHARED)
 #define FLAGDNN_API __declspec(dllexport)
@@ -239,9 +246,10 @@ typedef struct flagdnnGraph* flagdnnGraph_t;
 typedef struct flagdnnExecutable* flagdnnExecutable_t;
 
 /*
- * A stream is an opaque native backend stream. For CUDA this is a
- * cudaStream_t/CUstream value. A null value denotes that backend's default
- * stream.
+ * A stream is an opaque native backend stream. NVIDIA interprets it as a
+ * cudaStream_t/CUstream and Ascend interprets it as an aclrtStream. A null
+ * value denotes the selected backend's default stream. The caller owns the
+ * stream and must keep it alive until all enqueued work has completed.
  */
 typedef void* flagdnnStream_t;
 
@@ -279,6 +287,7 @@ typedef struct flagdnnBuildOptions {
 
 FLAGDNN_API size_t flagdnnGetVersion(void);
 FLAGDNN_API const char* flagdnnGetVersionString(void);
+FLAGDNN_API uint32_t flagdnnGetExecutionContractVersion(void);
 FLAGDNN_API const char* flagdnnGetErrorString(flagdnnStatus_t status);
 
 /*
@@ -670,8 +679,17 @@ FLAGDNN_API flagdnnStatus_t flagdnnGetExecutableWorkspaceSize(
     size_t* workspace_size);
 
 /*
- * Enqueues work on caller_stream. This function does not compile, allocate,
- * or synchronize. Device buffers and workspace remain caller-owned.
+ * Enqueues work on caller_stream. This function does not compile, autotune,
+ * or actively synchronize the stream/device. An execution engine may create
+ * bounded host temporaries that are released before return and reclaimable
+ * device temporaries whose cleanup is enqueued on caller_stream. Repeated
+ * execution must not leak or grow resident resources without bound.
+ *
+ * Device bindings, Graph workspace and stream remain caller-owned and must
+ * stay alive until the enqueued work completes. When the executable requires
+ * nonzero Graph workspace, workspace must be non-null and its base address
+ * must be at least 256-byte aligned. For a zero workspace requirement the
+ * backend ignores workspace, including its alignment.
  */
 FLAGDNN_API flagdnnStatus_t flagdnnExecuteAsync(
     flagdnnExecutable_t executable,

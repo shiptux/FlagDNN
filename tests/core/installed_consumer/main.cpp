@@ -401,7 +401,10 @@ int main() {
           fe::PointwiseMode_t::CMP_GE));
   frontend_comparison->set_uid(21).set_output(true);
 
-  return flagdnnGetVersion() == 100U && graph.operation_count() == 1 &&
+  return flagdnnGetVersion() == FLAGDNN_VERSION_NUMBER &&
+                 FLAGDNN_EXECUTION_CONTRACT_VERSION == 2U &&
+                 flagdnnGetExecutionContractVersion() == 2U &&
+                 graph.operation_count() == 1 &&
                  intermediate.is_virtual() &&
                  multi_operation_graph.operation_count() == 2 &&
                  binary_graph.operation_count() == 1 &&

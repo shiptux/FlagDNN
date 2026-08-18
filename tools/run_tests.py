@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import math
 import os
@@ -16,21 +17,14 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import ModuleType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "cmake" / "Operators.cmake"
-HYGON_COMPARABLE_CASE_CATALOG = (
-    ROOT
-    / "backends"
-    / "hygon"
-    / "validation"
-    / "benchmark"
-    / "comparable_cases.json"
-)
-HYGON_SPEEDUP_METRIC = "hipdnn_median_us/flagdnn_median_us"
 VALID_SUITES = ("functional", "benchmark")
 BUILD_CONFIGURATION_FILE = ".flagdnn-build-config"
+PLATFORM_ADAPTER_FILE = "run_tests_adapter.py"
 DEFAULT_OPERATORS = (
     "add",
     "sub",
@@ -52,24 +46,47 @@ CTEST_DISABLED_PATTERN = re.compile(
     r"(?:\*\*\*Not Run|\(Disabled\))",
     flags=re.IGNORECASE,
 )
-HYGON_VISIBILITY_VARIABLES = (
-    "CUDA_VISIBLE_DEVICES",
-    "HIP_VISIBLE_DEVICES",
-    "ROCR_VISIBLE_DEVICES",
-    "GPU_DEVICE_ORDINAL",
-)
-HYGON_CASE_FILTER_PATTERN = re.compile(r"^FLAGDNN_[A-Z0-9_]+_CASE$")
-HYGON_CONVOLUTION_CASE_PATTERN = re.compile(
-    r"^conv[123]d_(fprop|dgrad|wgrad)(?:_|$)"
-)
-HYGON_FUNCTIONAL_ACCOUNTING_MARKER_OVERRIDES = {
-    "conv_fprop": "CONVOLUTION",
-    "conv_dgrad": "CONVOLUTION",
-    "conv_wgrad": "CONVOLUTION",
-}
 PROCESS_TERMINATION_GRACE_SECONDS = 5.0
 PROCESS_KILL_GRACE_SECONDS = 5.0
 PROCESS_CLEANUP_POLL_SECONDS = 0.05
+_PLATFORM_ADAPTERS: dict[str, ModuleType | None] = {}
+
+
+def load_platform_adapter(platform: str) -> ModuleType | None:
+    """Load optional test policy owned by backends/<platform>/validation."""
+    if PLATFORM_PATTERN.fullmatch(platform) is None:
+        raise ValueError("platform name must match [a-z][a-z0-9_]*")
+    if platform in _PLATFORM_ADAPTERS:
+        return _PLATFORM_ADAPTERS[platform]
+    path = (
+        ROOT
+        / "backends"
+        / platform
+        / "validation"
+        / PLATFORM_ADAPTER_FILE
+    )
+    if not path.is_file():
+        _PLATFORM_ADAPTERS[platform] = None
+        return None
+    spec = importlib.util.spec_from_file_location(
+        f"_flagdnn_run_tests_adapter_{platform}", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load platform test adapter: {path}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        previous_bytecode_setting = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = previous_bytecode_setting
+    except Exception as error:
+        raise RuntimeError(
+            f"Cannot initialize platform test adapter {path}: {error}"
+        ) from error
+    _PLATFORM_ADAPTERS[platform] = module
+    return module
 
 
 def operator_manifests() -> dict[str, list[str]]:
@@ -124,6 +141,65 @@ def operator_manifests() -> dict[str, list[str]]:
     return {
         suite: list(resolve(set_name)) for suite, set_name in set_names.items()
     }
+
+
+def registered_manifests(
+    build_dir: Path,
+    platform: str,
+    manifests: dict[str, list[str]],
+    suites: list[str],
+    environment: dict[str, str],
+    timeout: int,
+    configuration: str | None = None,
+) -> dict[str, list[str]]:
+    command = [
+        "ctest",
+        "--test-dir",
+        str(build_dir),
+        "--show-only=json-v1",
+    ]
+    if configuration is not None:
+        command.extend(["-C", configuration])
+    stdout, stderr, exit_code, timed_out = run_process_group(
+        command, environment, min(timeout, 60)
+    )
+    if timed_out:
+        raise RuntimeError("CTest test discovery timed out")
+    if exit_code != 0:
+        detail = stderr.strip() or stdout.strip()
+        raise RuntimeError(
+            f"Cannot inspect configured {platform} tests"
+            + (f": {detail}" if detail else "")
+        )
+    try:
+        document = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"CTest returned invalid JSON while inspecting {platform} tests"
+        ) from error
+
+    tests = document.get("tests")
+    if not isinstance(tests, list):
+        raise RuntimeError("CTest JSON does not contain a test inventory")
+    names = {
+        test.get("name")
+        for test in tests
+        if isinstance(test, dict) and isinstance(test.get("name"), str)
+    }
+
+    result = dict(manifests)
+    for suite in suites:
+        prefix = f"{suite}.{platform}."
+        result[suite] = [
+            operator
+            for operator in manifests[suite]
+            if prefix + operator in names
+        ]
+        if not result[suite]:
+            raise RuntimeError(
+                f"No {suite} tests are registered for platform {platform}"
+            )
+    return result
 
 
 def requested_suites(value: str) -> list[str]:
@@ -195,25 +271,25 @@ def device_environment(
     platform: str,
     device: str | None,
     base_environment: dict[str, str] | None = None,
+    adapter: ModuleType | None = None,
 ) -> dict[str, str]:
     environment = dict(
         os.environ if base_environment is None else base_environment
     )
-    if platform == "hygon":
-        for variable in tuple(environment):
-            if HYGON_CASE_FILTER_PATTERN.fullmatch(variable) is not None:
-                environment.pop(variable, None)
-    if device is None:
+    if adapter is None:
+        adapter = load_platform_adapter(platform)
+    configure = (
+        None
+        if adapter is None
+        else getattr(adapter, "configure_environment", None)
+    )
+    if configure is None:
+        if device is not None:
+            raise ValueError(
+                f"platform {platform} does not define device visibility"
+            )
         return environment
-    if platform == "ascend":
-        environment["ASCEND_RT_VISIBLE_DEVICES"] = device
-        environment["NPU_VISIBLE_DEVICES"] = device
-    elif platform == "hygon":
-        for variable in HYGON_VISIBILITY_VARIABLES:
-            environment.pop(variable, None)
-        environment["HIP_VISIBLE_DEVICES"] = device
-    else:
-        environment["CUDA_VISIBLE_DEVICES"] = device
+    configure(environment, device)
     return environment
 
 
@@ -296,10 +372,11 @@ def resolve_build_configuration(
 
 def benchmark_records(
     output: str,
+    adapter: ModuleType | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[str]]:
     records: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
-    required_keys = {
+    v1_keys = {
         "schema_version",
         "kind",
         "provider",
@@ -316,6 +393,36 @@ def benchmark_records(
             and not isinstance(value, bool)
             and math.isfinite(float(value))
             and value > 0
+        )
+
+    def valid_metric(value: Any) -> bool:
+        return (
+            isinstance(value, dict)
+            and set(value) == {"median", "p90", "samples"}
+            and positive_number(value.get("median"))
+            and positive_number(value.get("p90"))
+            and isinstance(value.get("samples"), list)
+            and bool(value["samples"])
+            and all(positive_number(sample) for sample in value["samples"])
+        )
+
+    def valid_summary(metric: dict[str, Any]) -> bool:
+        ordered_samples = sorted(float(sample) for sample in metric["samples"])
+
+        def nearest_rank(fraction: float) -> float:
+            index = max(0, math.ceil(fraction * len(ordered_samples)) - 1)
+            return ordered_samples[index]
+
+        return math.isclose(
+            float(metric["median"]),
+            nearest_rank(0.5),
+            rel_tol=1.0e-9,
+            abs_tol=1.0e-12,
+        ) and math.isclose(
+            float(metric["p90"]),
+            nearest_rank(0.9),
+            rel_tol=1.0e-9,
+            abs_tol=1.0e-12,
         )
 
     for raw_line in output.splitlines():
@@ -338,58 +445,88 @@ def benchmark_records(
         # belong to this parser.
         if record.get("kind") != "steady_state":
             continue
-        actual_keys = set(record)
-        if actual_keys != required_keys:
-            missing = sorted(required_keys - actual_keys)
-            extra = sorted(actual_keys - required_keys)
-            errors.append(
-                "benchmark record fields do not match schema"
-                f"; missing={missing}; extra={extra}"
-            )
-            continue
+        version = record.get("schema_version")
+        version_is_v1 = (
+            isinstance(version, int)
+            and not isinstance(version, bool)
+            and version == 1
+        )
         case = record.get("case")
         provider = record.get("provider")
-        samples = record.get("samples")
         if (
-            record.get("schema_version") != 1
-            or record.get("kind") != "steady_state"
-            or record.get("unit") != "us"
-            or not isinstance(case, str)
+            not isinstance(case, str)
             or not case
             or not isinstance(provider, str)
             or not provider
-            or not positive_number(record.get("median"))
-            or not positive_number(record.get("p90"))
-            or not isinstance(samples, list)
-            or not samples
-            or not all(positive_number(sample) for sample in samples)
         ):
             errors.append(
-                "benchmark record violates result.schema.json: " + line
+                "benchmark record has an invalid case or provider: " + line
             )
             continue
-        ordered_samples = sorted(float(sample) for sample in samples)
-
-        def nearest_rank(fraction: float) -> float:
-            index = max(0, math.ceil(fraction * len(ordered_samples)) - 1)
-            return ordered_samples[index]
-
-        expected_median = nearest_rank(0.5)
-        expected_p90 = nearest_rank(0.9)
-        if not math.isclose(
-            float(record["median"]),
-            expected_median,
-            rel_tol=1.0e-9,
-            abs_tol=1.0e-12,
-        ) or not math.isclose(
-            float(record["p90"]),
-            expected_p90,
-            rel_tol=1.0e-9,
-            abs_tol=1.0e-12,
-        ):
+        if version_is_v1:
+            actual_keys = set(record)
+            if actual_keys != v1_keys:
+                missing = sorted(v1_keys - actual_keys)
+                extra = sorted(actual_keys - v1_keys)
+                errors.append(
+                    "benchmark record fields do not match schema"
+                    f"; missing={missing}; extra={extra}"
+                )
+                continue
+            metric = {
+                "median": record.get("median"),
+                "p90": record.get("p90"),
+                "samples": record.get("samples"),
+            }
+            if record.get("unit") != "us" or not valid_metric(metric):
+                errors.append(
+                    "benchmark record violates result.schema.json: " + line
+                )
+                continue
+            metrics = {"timing": metric}
+        else:
+            validator = (
+                None
+                if adapter is None
+                else getattr(adapter, "validate_benchmark_record", None)
+            )
+            if validator is None:
+                errors.append(
+                    f"unsupported benchmark schema_version={version!r}: "
+                    + line
+                )
+                continue
+            try:
+                metrics = validator(record)
+            except ValueError as error:
+                errors.append(
+                    "benchmark record violates result.schema.json: "
+                    f"{error}: {line}"
+                )
+                continue
+            if (
+                not isinstance(metrics, dict)
+                or not metrics
+                or not all(
+                    isinstance(name, str) and isinstance(metric, dict)
+                    for name, metric in metrics.items()
+                )
+            ):
+                errors.append(
+                    "platform adapter returned invalid benchmark metrics: "
+                    + line
+                )
+                continue
+        invalid_metrics = [
+            name
+            for name, metric in metrics.items()
+            if not valid_metric(metric) or not valid_summary(metric)
+        ]
+        if invalid_metrics:
             errors.append(
                 f"benchmark summary does not match samples for "
-                f"case={case} provider={provider}"
+                f"case={case} provider={provider} "
+                f"metrics={','.join(invalid_metrics)}"
             )
             continue
         case_records = records.setdefault(case, {})
@@ -401,493 +538,6 @@ def benchmark_records(
             continue
         case_records[provider] = record
     return records, errors
-
-
-def convolution_case_operator(case: str) -> str | None:
-    """Map a rank-qualified convolution case to its manifest operator."""
-    match = HYGON_CONVOLUTION_CASE_PATTERN.match(case)
-    if match is None:
-        return None
-    return f"conv_{match.group(1)}"
-
-
-def benchmark_case_operator(
-    case: str, manifest_operators: list[str]
-) -> str | None:
-    """Resolve a benchmark case to its longest manifest operator token."""
-    matches = [
-        candidate
-        for candidate in dict.fromkeys(manifest_operators)
-        if case == candidate or case.startswith(f"{candidate}_")
-    ]
-    convolution_operator = convolution_case_operator(case)
-    if (
-        convolution_operator is not None
-        and convolution_operator in manifest_operators
-    ):
-        matches.append(convolution_operator)
-    if not matches:
-        return None
-    return max(matches, key=len)
-
-
-def load_hygon_comparable_case_catalog(
-    manifest_operators: list[str],
-    path: Path = HYGON_COMPARABLE_CASE_CATALOG,
-) -> dict[str, Any]:
-    """Load the repository-owned set of benchmark cases comparable to hipDNN."""
-
-    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON object key: {key}")
-            result[key] = value
-        return result
-
-    try:
-        document = json.loads(
-            path.read_text(encoding="utf-8"), object_pairs_hook=unique_object
-        )
-    except (OSError, json.JSONDecodeError, ValueError) as error:
-        raise RuntimeError(
-            f"Cannot load Hygon comparable-case catalog {path}: {error}"
-        ) from error
-
-    required_keys = {
-        "schema_version",
-        "platform",
-        "suite",
-        "metric",
-        "source",
-        "declared_operator_count",
-        "declared_case_count",
-        "operators",
-    }
-    if not isinstance(document, dict) or set(document) != required_keys:
-        actual_keys = set(document) if isinstance(document, dict) else set()
-        raise RuntimeError(
-            "Hygon comparable-case catalog fields do not match schema; "
-            f"missing={sorted(required_keys - actual_keys)}; "
-            f"extra={sorted(actual_keys - required_keys)}"
-        )
-    schema_version = document["schema_version"]
-    if (
-        not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
-        or schema_version != 1
-        or document["platform"] != "hygon"
-        or document["suite"] != "benchmark"
-        or document["metric"] != HYGON_SPEEDUP_METRIC
-        or not isinstance(document["source"], str)
-        or not document["source"].strip()
-    ):
-        raise RuntimeError(
-            "Hygon comparable-case catalog metadata violates schema version 1"
-        )
-    operators = document["operators"]
-    if not isinstance(operators, dict):
-        raise RuntimeError(
-            "Hygon comparable-case catalog operators must be an object"
-        )
-    if not operators:
-        raise RuntimeError(
-            "Hygon comparable-case catalog must declare at least one operator"
-        )
-
-    normalized: dict[str, list[str]] = {}
-    all_cases: set[str] = set()
-    for operator, cases in operators.items():
-        if not isinstance(operator, str) or operator not in manifest_operators:
-            raise RuntimeError(
-                "Hygon comparable-case catalog declares an unknown benchmark "
-                f"operator: {operator!r}"
-            )
-        if not isinstance(cases, list) or not cases:
-            raise RuntimeError(
-                "Hygon comparable-case catalog operator must declare a "
-                f"nonempty case list: {operator}"
-            )
-        normalized_cases: list[str] = []
-        for case in cases:
-            if not isinstance(case, str) or not case.strip() or case != case.strip():
-                raise RuntimeError(
-                    "Hygon comparable-case catalog contains an invalid case "
-                    f"for operator={operator}: {case!r}"
-                )
-            owner = benchmark_case_operator(case, manifest_operators)
-            if owner != operator:
-                raise RuntimeError(
-                    "Hygon comparable-case catalog case ownership mismatch: "
-                    f"case={case} owner={owner} declared_operator={operator}"
-                )
-            if case in all_cases:
-                raise RuntimeError(
-                    "Hygon comparable-case catalog contains a duplicate case: "
-                    + case
-                )
-            all_cases.add(case)
-            normalized_cases.append(case)
-        normalized[operator] = normalized_cases
-
-    declared_operator_count = document["declared_operator_count"]
-    declared_case_count = document["declared_case_count"]
-    if (
-        not isinstance(declared_operator_count, int)
-        or isinstance(declared_operator_count, bool)
-        or declared_operator_count != len(normalized)
-        or not isinstance(declared_case_count, int)
-        or isinstance(declared_case_count, bool)
-        or declared_case_count != len(all_cases)
-    ):
-        raise RuntimeError(
-            "Hygon comparable-case catalog declared counts do not match its "
-            "operator/case contents"
-        )
-
-    return {
-        **{key: document[key] for key in required_keys - {"operators"}},
-        "catalog_path": str(path.resolve()),
-        "operators": normalized,
-    }
-
-
-def hygon_comparable_coverage(
-    results: dict[str, dict[str, Any]],
-    selected_benchmark_operators: list[str],
-    catalog: dict[str, Any],
-) -> dict[str, Any]:
-    """Verify every selected, declared case emitted a complete provider pair."""
-    declared = catalog["operators"]
-    selected_declared = [
-        operator
-        for operator in dict.fromkeys(selected_benchmark_operators)
-        if operator in declared
-    ]
-    missing: list[dict[str, str]] = []
-    observed_required = 0
-    observed_pairs = 0
-    required_cases = {
-        (operator, case)
-        for operator in selected_declared
-        for case in declared[operator]
-    }
-    for operator in selected_declared:
-        benchmark = results.get(operator, {}).get("benchmark")
-        status = (
-            benchmark.get("status")
-            if isinstance(benchmark, dict)
-            else "not_run"
-        )
-        records = (
-            benchmark.get("records", {})
-            if isinstance(benchmark, dict)
-            else {}
-        )
-        if not isinstance(records, dict):
-            records = {}
-        for case in declared[operator]:
-            providers = records.get(case)
-            if status == "passed" and isinstance(providers, dict) and set(
-                providers
-            ) == {"flagdnn", "hipdnn"}:
-                observed_required += 1
-                continue
-            missing.append(
-                {
-                    "operator": operator,
-                    "case": case,
-                    "benchmark_status": str(status),
-                }
-            )
-
-    for operator in dict.fromkeys(selected_benchmark_operators):
-        benchmark = results.get(operator, {}).get("benchmark")
-        if not isinstance(benchmark, dict) or benchmark.get("status") != "passed":
-            continue
-        records = benchmark.get("records", {})
-        if not isinstance(records, dict):
-            continue
-        observed_pairs += sum(
-            isinstance(providers, dict)
-            and set(providers) == {"flagdnn", "hipdnn"}
-            for providers in records.values()
-        )
-
-    return {
-        "schema_version": catalog["schema_version"],
-        "metric": catalog["metric"],
-        "source": catalog["source"],
-        "catalog_path": catalog.get(
-            "catalog_path", str(HYGON_COMPARABLE_CASE_CATALOG)
-        ),
-        "declared_operator_count": catalog["declared_operator_count"],
-        "declared_case_count": catalog["declared_case_count"],
-        "selected_declared_operators": selected_declared,
-        "required_case_count": len(required_cases),
-        "observed_required_case_count": observed_required,
-        "observed_pair_case_count": observed_pairs,
-        "extra_pair_case_count": observed_pairs - observed_required,
-        "missing_case_count": len(missing),
-        "missing_cases": missing,
-        "verified": not missing,
-    }
-
-
-def validate_hygon_benchmark_pairs(
-    records: dict[str, dict[str, Any]],
-    operator: str,
-    manifest_operators: list[str],
-) -> list[str]:
-    errors: list[str] = []
-    expected = {"flagdnn", "hipdnn"}
-    if not records:
-        return ["passed Hygon benchmark emitted no provider records"]
-    for case, providers in records.items():
-        owner = benchmark_case_operator(case, manifest_operators)
-        if owner != operator:
-            errors.append(
-                f"Hygon benchmark emitted case={case} owned_by={owner}; "
-                f"expected owner={operator}"
-            )
-        actual = set(providers)
-        if actual != expected:
-            errors.append(
-                f"Hygon benchmark case={case} providers={sorted(actual)}; "
-                f"expected={sorted(expected)}"
-            )
-    return errors
-
-
-def benchmark_speedup_summary(
-    results: dict[str, dict[str, Any]],
-    threshold: float | None,
-    comparable_coverage: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Summarize strict per-case hipDNN/FlagDNN median speedups."""
-    cases: list[dict[str, Any]] = []
-    for operator, operator_results in results.items():
-        benchmark = operator_results.get("benchmark")
-        # A failed process can emit a valid prefix of timing records before
-        # aborting. Those partial records are diagnostic evidence, not a
-        # complete benchmark result, and must never contribute to the gate.
-        if (
-            not isinstance(benchmark, dict)
-            or benchmark.get("status") != "passed"
-        ):
-            continue
-        records = benchmark.get("records", {})
-        if not isinstance(records, dict):
-            continue
-        for case, providers in records.items():
-            if not isinstance(providers, dict) or set(providers) != {
-                "flagdnn",
-                "hipdnn",
-            }:
-                continue
-            flagdnn_us = float(providers["flagdnn"]["median"])
-            hipdnn_us = float(providers["hipdnn"]["median"])
-            cases.append(
-                {
-                    "operator": operator,
-                    "case": case,
-                    "flagdnn_median_us": flagdnn_us,
-                    "hipdnn_median_us": hipdnn_us,
-                    "speedup": hipdnn_us / flagdnn_us,
-                }
-            )
-    cases.sort(key=lambda record: (record["speedup"], record["case"]))
-    failures = (
-        []
-        if threshold is None
-        else [record for record in cases if record["speedup"] < threshold]
-    )
-    ratio_gate_passed = threshold is None or (bool(cases) and not failures)
-    coverage_gate_passed = (
-        threshold is None
-        if comparable_coverage is None
-        else bool(comparable_coverage.get("verified"))
-    )
-    return {
-        "metric": HYGON_SPEEDUP_METRIC,
-        "threshold": threshold,
-        "gate_passed": ratio_gate_passed and coverage_gate_passed,
-        "ratio_gate_passed": ratio_gate_passed,
-        "coverage_gate_passed": coverage_gate_passed,
-        "comparable_coverage_verified": (
-            None
-            if comparable_coverage is None
-            else bool(comparable_coverage.get("verified"))
-        ),
-        "case_count": len(cases),
-        "passed_case_count": len(cases) - len(failures),
-        "failed_case_count": len(failures),
-        "minimum_speedup": cases[0]["speedup"] if cases else None,
-        "failures": failures,
-    }
-
-
-def validate_hygon_case_accounting(
-    output: str,
-    operator: str,
-    suite: str,
-    ctest_reported_status: str,
-    records: dict[str, dict[str, Any]],
-    skip_records: list[dict[str, str]],
-) -> list[str]:
-    marker_records: list[tuple[str, str]] = []
-    marker_pattern = re.compile(
-        r"^(FLAGDNN_[A-Z0-9_]+_(?:FUNCTIONAL|BENCHMARK)):\s*(.*)$"
-    )
-    accounting_pattern = re.compile(
-        r"(PASS|SKIP)\s+"
-        r"(?:(?:cases)=(\d+)\s+)?executed=(\d+)\s+skipped=(\d+)\s*$"
-    )
-    for raw_line in output.splitlines():
-        line = re.sub(r"^\s*\d+:\s?", "", raw_line).strip()
-        match = marker_pattern.fullmatch(line)
-        if match is not None:
-            marker_records.append((match.group(1), match.group(2)))
-    marker_operator = operator.upper()
-    if suite == "functional":
-        marker_operator = HYGON_FUNCTIONAL_ACCOUNTING_MARKER_OVERRIDES.get(
-            operator, marker_operator
-        )
-    expected_marker = f"FLAGDNN_{marker_operator}_{suite.upper()}"
-    if len(marker_records) != 1:
-        found_markers = [record[0] for record in marker_records]
-        return [
-            f"Hygon {suite} suite for op={operator} must emit exactly one "
-            f"{expected_marker} case accounting record; found "
-            f"{len(marker_records)} markers={found_markers}"
-        ]
-    marker, accounting = marker_records[0]
-    errors: list[str] = []
-    if marker != expected_marker:
-        errors.append(
-            f"Hygon suite accounting marker={marker}; "
-            f"expected {expected_marker}"
-        )
-    match = accounting_pattern.fullmatch(accounting)
-    if match is None:
-        errors.append(
-            f"Hygon suite accounting payload for marker={marker} is malformed"
-        )
-        return errors
-    reported = match.group(1)
-    matched = int(match.group(2)) if match.group(2) is not None else None
-    executed = int(match.group(3))
-    skipped = int(match.group(4))
-    expected_reported = "SKIP" if ctest_reported_status == "skipped" else "PASS"
-    if reported != expected_reported:
-        errors.append(
-            f"Hygon suite accounting status={reported}; "
-            f"CTest status requires {expected_reported}"
-        )
-    if matched is None:
-        errors.append(f"Hygon {suite} accounting omitted cases=<count>")
-    else:
-        if matched <= 0:
-            errors.append("Hygon suite accounting cases must be positive")
-        if matched != executed + skipped:
-            errors.append(
-                f"Hygon suite cases={matched} but executed+skipped="
-                f"{executed + skipped}"
-            )
-    if reported == "PASS" and executed <= 0:
-        errors.append("Hygon PASS suite must execute at least one case")
-    if reported == "SKIP" and (
-        executed != 0 or matched is None or skipped != matched
-    ):
-        errors.append(
-            "Hygon SKIP suite must execute zero cases and skip every case"
-        )
-    if len(skip_records) != skipped:
-        errors.append(
-            f"Hygon suite reports skipped={skipped} but emitted "
-            f"{len(skip_records)} unique structured skip records"
-        )
-    if suite == "benchmark":
-        if len(records) != executed:
-            errors.append(
-                f"Hygon benchmark reports executed={executed} but emitted "
-                f"{len(records)} complete case record groups"
-            )
-    return errors
-
-
-def hipdnn_skip_records(output: str) -> list[dict[str, str]]:
-    records: list[dict[str, str]] = []
-    pattern = re.compile(
-        r"^\[SKIP\]\[hipdnn\]\s+op=([^\s]+)\s+"
-        r"case=([^\s]+)\s+reason=(.+)$"
-    )
-    for raw_line in output.splitlines():
-        line = re.sub(r"^\s*\d+:\s?", "", raw_line).strip()
-        if not line.startswith("[SKIP][hipdnn]"):
-            continue
-        match = pattern.fullmatch(line)
-        record = {"message": line}
-        if match is not None:
-            record.update(
-                {
-                    "op": match.group(1),
-                    "case": match.group(2),
-                    "reason": match.group(3),
-                }
-            )
-        records.append(record)
-    return records
-
-
-def validate_hygon_skip_records(
-    records: list[dict[str, str]],
-    operator: str,
-    manifest_operators: list[str],
-) -> list[str]:
-    errors: list[str] = []
-    matching_records = 0
-    if not records:
-        return [
-            "skipped Hygon suite emitted no structured "
-            f"[SKIP][hipdnn] record for op={operator}"
-        ]
-    for index, record in enumerate(records, start=1):
-        missing = [
-            key
-            for key in ("op", "case", "reason")
-            if not record.get(key, "").strip()
-        ]
-        if missing:
-            errors.append(
-                f"hipDNN skip record {index} is missing non-empty "
-                + ", ".join(missing)
-            )
-            continue
-        if record["op"] != operator:
-            errors.append(
-                f"hipDNN skip record {index} has op={record['op']}; "
-                f"expected op={operator}"
-            )
-            continue
-        case = record["case"]
-        owner = benchmark_case_operator(case, manifest_operators)
-        if owner != operator:
-            errors.append(
-                f"hipDNN skip record {index} has case={case} "
-                f"owned_by={owner}; expected owner={operator}"
-            )
-            continue
-        matching_records += 1
-    cases = [record.get("case", "") for record in records]
-    if len(cases) != len(set(cases)):
-        errors.append("hipDNN skip records contain duplicate case names")
-    if matching_records == 0:
-        errors.append(
-            "skipped Hygon suite emitted no legal skip record matching "
-            f"op={operator}"
-        )
-    return errors
 
 
 def ctest_status(exit_code: int, output: str) -> str:
@@ -927,11 +577,17 @@ def ctest_command(
     suite: str,
     platform: str,
     configuration: str | None = None,
+    adapter: ModuleType | None = None,
 ) -> list[str]:
     test_name = f"{suite}.{platform}.{operator}"
     expression = f"^{re.escape(test_name)}$"
-    if platform == "nvidia" and suite == "functional" and operator == "matmul":
-        expression = r"^functional\.nvidia\.matmul(\.host)?$"
+    if adapter is None:
+        adapter = load_platform_adapter(platform)
+    expression_hook = (
+        None if adapter is None else getattr(adapter, "test_expression", None)
+    )
+    if expression_hook is not None:
+        expression = expression_hook(suite, operator) or expression
     return verbose_ctest_command(build_dir, expression, configuration)
 
 
@@ -1180,9 +836,17 @@ def run_one(
     verbose: bool,
     manifest_operators: list[str],
     configuration: str | None = None,
+    adapter: ModuleType | None = None,
 ) -> dict[str, Any]:
+    if adapter is None:
+        adapter = load_platform_adapter(platform)
     command = ctest_command(
-        build_dir, operator, suite, platform, configuration
+        build_dir,
+        operator,
+        suite,
+        platform,
+        configuration,
+        adapter,
     )
     started = time.monotonic()
     stdout, stderr, exit_code, timed_out = run_process_group(
@@ -1202,31 +866,12 @@ def run_one(
         "command": command,
     }
     combined_output = stdout + "\n" + stderr
-    skip_records = hipdnn_skip_records(combined_output)
-    if skip_records:
-        result["skip_records"] = skip_records
-    if platform == "hygon" and (
-        ctest_reported_status == "skipped" or skip_records
-    ):
-        skip_record_errors = validate_hygon_skip_records(
-            skip_records, operator, manifest_operators
-        )
-        if skip_record_errors:
-            result["skip_record_errors"] = skip_record_errors
-            status = "failed"
-            result["status"] = status
     records: dict[str, dict[str, Any]] = {}
     if suite == "benchmark":
-        records, record_errors = benchmark_records(combined_output)
+        records, record_errors = benchmark_records(combined_output, adapter)
         if ctest_reported_status == "passed" and not records:
             record_errors.append(
                 "passed benchmark emitted no steady-state timing records"
-            )
-        if status == "passed" and platform == "hygon":
-            record_errors.extend(
-                validate_hygon_benchmark_pairs(
-                    records, operator, manifest_operators
-                )
             )
         if ctest_reported_status == "skipped" and records:
             record_errors.append(
@@ -1238,22 +883,22 @@ def run_one(
             if status in ("passed", "skipped"):
                 status = "failed"
                 result["status"] = status
-    if (
-        platform == "hygon"
-        and ctest_reported_status in ("passed", "skipped")
-    ):
-        accounting_errors = validate_hygon_case_accounting(
-            combined_output,
-            operator,
-            suite,
-            ctest_reported_status,
-            records,
-            skip_records,
+    postprocess = (
+        None
+        if adapter is None
+        else getattr(adapter, "postprocess_result", None)
+    )
+    if postprocess is not None:
+        postprocess(
+            result=result,
+            ctest_reported_status=ctest_reported_status,
+            output=combined_output,
+            operator=operator,
+            suite=suite,
+            records=records,
+            manifest_operators=manifest_operators,
         )
-        if accounting_errors:
-            result["case_accounting_errors"] = accounting_errors
-            status = "failed"
-            result["status"] = status
+    status = result["status"]
     if verbose or status != "passed":
         if stdout:
             print(stdout, end="" if stdout.endswith("\n") else "\n")
@@ -1265,15 +910,22 @@ def run_one(
             )
         for error in result.get("record_errors", []):
             print(f"benchmark record error: {error}", file=sys.stderr)
-        for error in result.get("skip_record_errors", []):
-            print(f"hipDNN skip record error: {error}", file=sys.stderr)
-        for error in result.get("case_accounting_errors", []):
-            print(f"Hygon case accounting error: {error}", file=sys.stderr)
+        diagnostics = (
+            []
+            if adapter is None
+            else getattr(adapter, "result_diagnostics", lambda _result: [])(
+                result
+            )
+        )
+        for label, error in diagnostics:
+            print(f"{label}: {error}", file=sys.stderr)
     return result
 
 
 def required_preflight_tests(
-    platform: str, suites: list[str] | tuple[str, ...] = VALID_SUITES
+    platform: str,
+    suites: list[str] | tuple[str, ...] = VALID_SUITES,
+    adapter: ModuleType | None = None,
 ) -> set[str]:
     required_tests = {
         "core.json_contract",
@@ -1296,34 +948,13 @@ def required_preflight_tests(
                 "benchmark.catalog_dependency_boundary",
             }
         )
-    if platform == "hygon":
-        required_tests.update(
-            {
-                "integration.hygon.validation_contract",
-                "integration.hygon.convolution_validation_static_contract",
-                "integration.hygon.cmake_configuration_contract",
-                "integration.hygon.dependency_boundary",
-                "integration.hygon.compiler_contract",
-                "integration.hygon.reference_dependency_boundary",
-                "integration.hygon.jit",
-                "integration.hygon.pointwise_smoke",
-                "integration.hygon.installed_consumer",
-                "integration.hygon.runtime",
-                "integration.hygon.graph",
-                "integration.hygon.jit_candidate_compatibility_contract",
-                "integration.hygon.jit_global_state_contract",
-                "integration.hygon.normalization_stability",
-            }
-        )
-    elif platform == "nvidia":
-        required_tests.update(
-            {
-                "integration.nvidia.dependency_boundary",
-                "integration.nvidia.reference_dependency_boundary",
-                "integration.nvidia.runtime",
-                "integration.nvidia.graph",
-            }
-        )
+    if adapter is None:
+        adapter = load_platform_adapter(platform)
+    platform_tests = (
+        None if adapter is None else getattr(adapter, "preflight_tests", None)
+    )
+    if platform_tests is not None:
+        required_tests.update(platform_tests(suites))
     return required_tests
 
 
@@ -1335,13 +966,19 @@ def run_preflight(
     verbose: bool,
     suites: list[str],
     configuration: str | None = None,
+    adapter: ModuleType | None = None,
 ) -> dict[str, Any]:
-    visibility_masks = {
-        variable: environment[variable]
-        for variable in HYGON_VISIBILITY_VARIABLES
-        if variable in environment
-    }
-    required_tests = required_preflight_tests(platform, suites)
+    if adapter is None:
+        adapter = load_platform_adapter(platform)
+    metadata: dict[str, Any] = {"visibility_masks": {}}
+    metadata_hook = (
+        None
+        if adapter is None
+        else getattr(adapter, "preflight_metadata", None)
+    )
+    if metadata_hook is not None:
+        metadata.update(metadata_hook(environment))
+    required_tests = required_preflight_tests(platform, suites, adapter)
 
     listing_command = [
         "ctest",
@@ -1392,7 +1029,7 @@ def run_preflight(
             "required_tests": sorted(required_tests),
             "missing_tests": missing_tests,
             "errors": errors,
-            "visibility_masks": visibility_masks,
+            **metadata,
         }
 
     patterns = [r"core\."]
@@ -1428,7 +1065,7 @@ def run_preflight(
         "required_tests": sorted(required_tests),
         "missing_tests": [],
         "errors": [],
-        "visibility_masks": visibility_masks,
+        **metadata,
     }
 
 
@@ -1532,14 +1169,14 @@ def parse_arguments() -> argparse.Namespace:
         "--min-speedup",
         type=float,
         help=(
-            "Hygon benchmark-only per-case minimum median speedup, defined "
-            "as hipDNN_us/FlagDNN_us"
+            "platform-defined benchmark speedup threshold; available only "
+            "when supported by the selected platform adapter"
         ),
     )
     parser.add_argument(
         "--platform",
         default=os.environ.get("FLAGDNN_BENCHMARK_PLATFORM", "nvidia"),
-        help="benchmark CTest platform component",
+        help="CTest platform component",
     )
     parser.add_argument(
         "--device",
@@ -1551,8 +1188,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=1800,
-        help="timeout in seconds for each operator/suite",
+        help=(
+            "timeout in seconds for each operator/suite "
+            "(default: selected platform policy, or 1800)"
+        ),
     )
     parser.add_argument(
         "--config",
@@ -1676,6 +1315,7 @@ def _run_main() -> int:
             "--platform must match [a-z][a-z0-9_]*"
         )
     try:
+        adapter = load_platform_adapter(arguments.platform)
         manifests = operator_manifests()
         suites = requested_suites(arguments.suites)
         if arguments.list:
@@ -1690,11 +1330,19 @@ def _run_main() -> int:
                 suites=suites,
                 operators=list(listed),
             )
-        suite_operators = requested_operators(
-            manifests,
-            suites,
-            arguments.ops,
-            arguments.op_list_file,
+        filter_registered = bool(
+            adapter is not None
+            and getattr(adapter, "FILTER_REGISTERED_TESTS", False)
+        )
+        suite_operators = (
+            None
+            if filter_registered
+            else requested_operators(
+                manifests,
+                suites,
+                arguments.ops,
+                arguments.op_list_file,
+            )
         )
     except (OSError, RuntimeError, ValueError) as error:
         return validation_error(str(error))
@@ -1707,20 +1355,72 @@ def _run_main() -> int:
         build_configuration = resolve_build_configuration(
             build_dir, arguments.config
         )
-    except (OSError, ValueError) as error:
+        default_timeout = (
+            1800
+            if adapter is None
+            else getattr(adapter, "DEFAULT_TIMEOUT", 1800)
+        )
+        timeout = (
+            default_timeout if arguments.timeout is None else arguments.timeout
+        )
+        if (
+            not isinstance(timeout, int)
+            or isinstance(timeout, bool)
+            or timeout <= 0
+        ):
+            raise ValueError("--timeout must be positive")
+        environment = device_environment(
+            arguments.platform,
+            arguments.device,
+            adapter=adapter,
+        )
+        if filter_registered:
+            manifests = registered_manifests(
+                build_dir,
+                arguments.platform,
+                manifests,
+                suites,
+                environment,
+                timeout,
+                build_configuration,
+            )
+            suite_operators = requested_operators(
+                manifests,
+                suites,
+                arguments.ops,
+                arguments.op_list_file,
+            )
+    except (OSError, RuntimeError, ValueError) as error:
         return validation_error(str(error))
-    if arguments.timeout <= 0:
-        return validation_error("--timeout must be positive")
+
+    assert suite_operators is not None
     if arguments.min_speedup is not None and (
         not math.isfinite(arguments.min_speedup)
         or arguments.min_speedup <= 0.0
     ):
         return validation_error("--min-speedup must be finite and positive")
-    if arguments.min_speedup is not None and arguments.platform != "hygon":
-        return validation_error("--min-speedup is Hygon-only")
     if arguments.min_speedup is not None and "benchmark" not in suites:
         return validation_error("--min-speedup requires the benchmark suite")
-    environment = device_environment(arguments.platform, arguments.device)
+    supports_min_speedup = bool(
+        adapter is not None
+        and getattr(adapter, "SUPPORTS_MIN_SPEEDUP", False)
+    )
+    if arguments.min_speedup is not None and not supports_min_speedup:
+        return validation_error(
+            f"--min-speedup is not supported by platform "
+            f"{arguments.platform}"
+        )
+
+    prepare = None if adapter is None else getattr(adapter, "prepare", None)
+    try:
+        platform_state = (
+            {} if prepare is None else prepare(manifests, suites)
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        return validation_error(str(error))
+    if not isinstance(platform_state, dict):
+        return validation_error("platform adapter returned invalid state")
+
     manifest_operators = list(
         dict.fromkeys(
             operator
@@ -1728,14 +1428,6 @@ def _run_main() -> int:
             for operator in manifest
         )
     )
-    hygon_comparable_catalog: dict[str, Any] | None = None
-    if arguments.platform == "hygon" and "benchmark" in suites:
-        try:
-            hygon_comparable_catalog = load_hygon_comparable_case_catalog(
-                manifests["benchmark"]
-            )
-        except RuntimeError as error:
-            return validation_error(str(error))
     operators = list(
         dict.fromkeys(
             operator for suite in suites for operator in suite_operators[suite]
@@ -1746,13 +1438,18 @@ def _run_main() -> int:
         return validation_error(
             "operator selection produced zero operator/suite runs"
         )
+
     results: dict[str, dict[str, Any]] = {}
     failed = False
     preflight_result: dict[str, Any] | None = None
+    preflight_default = bool(
+        adapter is not None
+        and getattr(adapter, "PREFLIGHT_BY_DEFAULT", False)
+    )
     should_run_preflight = (
-        arguments.preflight
-        if arguments.preflight is not None
-        else arguments.platform == "hygon"
+        preflight_default
+        if arguments.preflight is None
+        else arguments.preflight
     )
     if should_run_preflight:
         print(
@@ -1762,10 +1459,11 @@ def _run_main() -> int:
             build_dir=build_dir,
             platform=arguments.platform,
             environment=environment,
-            timeout=arguments.timeout,
+            timeout=timeout,
             verbose=arguments.verbose,
             suites=suites,
             configuration=build_configuration,
+            adapter=adapter,
         )
         preflight_status = preflight_result["status"]
         print(
@@ -1775,8 +1473,17 @@ def _run_main() -> int:
             flush=True,
         )
         failed = preflight_status != "passed"
-    completed_count = 0
 
+    status_is_success = (
+        (lambda status: status == "passed")
+        if adapter is None
+        else getattr(
+            adapter,
+            "status_is_success",
+            lambda status: status == "passed",
+        )
+    )
+    completed_count = 0
     if not failed:
         for suite in suites:
             for operator in suite_operators[suite]:
@@ -1791,48 +1498,37 @@ def _run_main() -> int:
                     suite=suite,
                     platform=arguments.platform,
                     environment=environment,
-                    timeout=arguments.timeout,
+                    timeout=timeout,
                     verbose=arguments.verbose,
                     manifest_operators=manifest_operators,
                     configuration=build_configuration,
+                    adapter=adapter,
                 )
                 results.setdefault(operator, {})[suite] = result
                 status = result["status"]
                 duration = result["duration_seconds"]
                 print(f"  {status}: {duration:.2f}s", flush=True)
-                expected_skip = (
-                    arguments.platform == "hygon" and status == "skipped"
-                )
-                failed = failed or (
-                    status != "passed" and not expected_skip
-                )
+                failed = failed or not status_is_success(status)
 
-    comparable_coverage: dict[str, Any] | None = None
-    if hygon_comparable_catalog is not None and not (
-        preflight_result is not None
-        and preflight_result["status"] != "passed"
-    ):
-        comparable_coverage = hygon_comparable_coverage(
-            results,
-            suite_operators["benchmark"],
-            hygon_comparable_catalog,
+    preflight_passed = (
+        preflight_result is None or preflight_result["status"] == "passed"
+    )
+    finalize = None if adapter is None else getattr(adapter, "finalize", None)
+    platform_outcome = (
+        {"failed": False, "summary": {}, "coverage": {}}
+        if finalize is None
+        else finalize(
+            results=results,
+            suite_operators=suite_operators,
+            suites=suites,
+            state=platform_state,
+            min_speedup=arguments.min_speedup,
+            preflight_passed=preflight_passed,
         )
-        if not comparable_coverage["verified"]:
-            print(
-                "comparable coverage gate: "
-                f"{comparable_coverage['observed_required_case_count']}/"
-                f"{comparable_coverage['required_case_count']} declared cases "
-                "emitted complete FlagDNN/hipDNN pairs",
-                flush=True,
-            )
-            for missing in comparable_coverage["missing_cases"]:
-                print(
-                    "  FAIL missing comparable pair "
-                    f"op={missing['operator']} case={missing['case']} "
-                    f"benchmark_status={missing['benchmark_status']}",
-                    flush=True,
-                )
-            failed = True
+    )
+    if not isinstance(platform_outcome, dict):
+        raise RuntimeError("platform adapter returned an invalid outcome")
+    failed = failed or bool(platform_outcome.get("failed", False))
 
     status_counts = {
         status: sum(
@@ -1845,65 +1541,34 @@ def _run_main() -> int:
     benchmark_case_pairs = 0
     benchmark_provider_records = 0
     benchmark_record_errors = 0
-    hipdnn_skip_record_errors = 0
-    hygon_case_accounting_errors = 0
-    hipdnn_reference_skips = 0
     for operator_results in results.values():
         for result in operator_results.values():
             if result["status"] == "passed":
                 records = result.get("records", {})
-                benchmark_provider_records += sum(
-                    len(providers) for providers in records.values()
-                )
-                benchmark_case_pairs += sum(
-                    set(providers) == {"flagdnn", "hipdnn"}
-                    for providers in records.values()
-                )
+                if isinstance(records, dict):
+                    benchmark_provider_records += sum(
+                        len(providers)
+                        for providers in records.values()
+                        if isinstance(providers, dict)
+                    )
+                    benchmark_case_pairs += sum(
+                        isinstance(providers, dict) and len(providers) >= 2
+                        for providers in records.values()
+                    )
             benchmark_record_errors += len(result.get("record_errors", []))
-            hipdnn_skip_record_errors += len(
-                result.get("skip_record_errors", [])
-            )
-            hygon_case_accounting_errors += len(
-                result.get("case_accounting_errors", [])
-            )
-            if result["status"] in ("passed", "skipped"):
-                hipdnn_reference_skips += len(result.get("skip_records", []))
 
-    performance = (
-        benchmark_speedup_summary(
-            results,
-            arguments.min_speedup,
-            comparable_coverage,
-        )
-        if arguments.platform == "hygon" and "benchmark" in suites
-        else None
-    )
-    if arguments.min_speedup is not None:
-        assert performance is not None
-        failures = performance["failures"]
-        print(
-            "performance gate: "
-            f"{performance['passed_case_count']}/"
-            f"{performance['case_count']} cases meet "
-            f"speedup >= {arguments.min_speedup:.6g}",
-            flush=True,
-        )
-        for record in failures:
-            print(
-                "  FAIL "
-                f"op={record['operator']} case={record['case']} "
-                f"flagdnn_us={record['flagdnn_median_us']:.9g} "
-                f"hipdnn_us={record['hipdnn_median_us']:.9g} "
-                f"speedup={record['speedup']:.9g}",
-                flush=True,
-            )
-        if performance["case_count"] == 0:
-            print(
-                "  FAIL no comparable FlagDNN/hipDNN benchmark case was "
-                "emitted",
-                flush=True,
-            )
-        failed = failed or not performance["gate_passed"]
+    coverage = {
+        "benchmark_case_pairs": benchmark_case_pairs,
+        "benchmark_provider_records": benchmark_provider_records,
+        "benchmark_record_errors": benchmark_record_errors,
+    }
+    platform_coverage = platform_outcome.get("coverage", {})
+    if not isinstance(platform_coverage, dict):
+        raise RuntimeError("platform adapter returned invalid coverage")
+    coverage.update(platform_coverage)
+    platform_summary = platform_outcome.get("summary", {})
+    if not isinstance(platform_summary, dict):
+        raise RuntimeError("platform adapter returned invalid summary")
 
     final_exit_code = 1 if failed else 0
     summary = {
@@ -1919,17 +1584,11 @@ def _run_main() -> int:
         "suite_operators": suite_operators,
         "preflight": preflight_result,
         "status_counts": status_counts,
-        "coverage": {
-            "benchmark_case_pairs": benchmark_case_pairs,
-            "benchmark_provider_records": benchmark_provider_records,
-            "benchmark_record_errors": benchmark_record_errors,
-            "hipdnn_reference_skips": hipdnn_reference_skips,
-            "hipdnn_skip_record_errors": hipdnn_skip_record_errors,
-            "hygon_case_accounting_errors": hygon_case_accounting_errors,
-        },
-        "comparable_coverage": comparable_coverage,
-        "performance": performance,
+        "coverage": coverage,
+        "comparable_coverage": None,
+        "performance": None,
         "results": results,
+        **platform_summary,
     }
     if output is not None:
         try:
@@ -1943,7 +1602,6 @@ def _run_main() -> int:
         print(f"summary: {output}")
 
     return final_exit_code
-
 
 def main() -> int:
     previous_handlers: dict[signal.Signals, Any] = {}

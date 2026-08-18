@@ -1,52 +1,181 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://flagdnn.example/schemas/native-benchmark-result-v1.json",
+  "$id": "https://flagdnn.example/schemas/native-benchmark-result-v2.json",
   "title": "FlagDNN native benchmark result",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "kind",
-    "provider",
-    "case",
-    "unit",
-    "median",
-    "p90",
-    "samples"
+  "oneOf": [
+    {"$ref": "#/$defs/v1"},
+    {"$ref": "#/$defs/v2"}
   ],
-  "properties": {
-    "schema_version": {
-      "const": 1
-    },
-    "kind": {
-      "const": "steady_state"
-    },
-    "provider": {
-      "type": "string",
-      "minLength": 1
-    },
-    "case": {
-      "type": "string",
-      "minLength": 1
-    },
-    "unit": {
-      "const": "us"
-    },
-    "median": {
-      "type": "number",
-      "exclusiveMinimum": 0
-    },
-    "p90": {
-      "type": "number",
-      "exclusiveMinimum": 0
-    },
-    "samples": {
+  "$defs": {
+    "positiveSamples": {
       "type": "array",
       "minItems": 1,
-      "items": {
-        "type": "number",
-        "exclusiveMinimum": 0
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["median", "p90", "samples"],
+      "properties": {
+        "median": {"type": "number", "exclusiveMinimum": 0},
+        "p90": {"type": "number", "exclusiveMinimum": 0},
+        "samples": {"$ref": "#/$defs/positiveSamples"}
       }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "soc_fingerprint",
+        "cann_package_version",
+        "ascendcl_build_id",
+        "runtime_build_id"
+      ],
+      "properties": {
+        "soc_fingerprint": {"type": "string", "minLength": 1},
+        "cann_package_version": {"type": "string", "minLength": 1},
+        "ascendcl_build_id": {"type": "string", "minLength": 1},
+        "runtime_build_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "benchmarkConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warmup_iterations",
+        "sample_count",
+        "iterations_per_sample"
+      ],
+      "properties": {
+        "warmup_iterations": {"type": "integer", "minimum": 0},
+        "sample_count": {"type": "integer", "minimum": 1},
+        "iterations_per_sample": {"type": "integer", "minimum": 1}
+      }
+    },
+    "flagdnnIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "libtriton_jit_sha256",
+        "compiler_identity_sha256",
+        "artifact_request_sha256",
+        "launch_abi",
+        "selected_candidate"
+      ],
+      "properties": {
+        "libtriton_jit_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "compiler_identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "artifact_request_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "launch_abi": {"const": "ltj_npu_raw_v1"},
+        "selected_candidate": {"type": "string", "minLength": 1}
+      }
+    },
+    "aclnnIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["libnnopbase_sha256", "libopapi_math_sha256"],
+      "properties": {
+        "libnnopbase_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "libopapi_math_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "libopapi_nn_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "provider",
+        "case",
+        "unit",
+        "median",
+        "p90",
+        "samples"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"const": "steady_state"},
+        "provider": {"type": "string", "minLength": 1},
+        "case": {"type": "string", "minLength": 1},
+        "unit": {"const": "us"},
+        "median": {"type": "number", "exclusiveMinimum": 0},
+        "p90": {"type": "number", "exclusiveMinimum": 0},
+        "samples": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "number", "exclusiveMinimum": 0}
+        }
+      }
+    },
+    "v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "provider",
+        "case",
+        "environment",
+        "provider_identity",
+        "benchmark_config",
+        "stream_us",
+        "submit_us",
+        "end_to_end_us"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "kind": {"const": "steady_state"},
+        "provider": {"enum": ["flagdnn", "aclnn"]},
+        "case": {"type": "string", "minLength": 1},
+        "environment": {"$ref": "#/$defs/environment"},
+        "provider_identity": {
+          "oneOf": [
+            {"$ref": "#/$defs/flagdnnIdentity"},
+            {"$ref": "#/$defs/aclnnIdentity"}
+          ]
+        },
+        "benchmark_config": {"$ref": "#/$defs/benchmarkConfig"},
+        "stream_us": {"$ref": "#/$defs/metric"},
+        "submit_us": {"$ref": "#/$defs/metric"},
+        "end_to_end_us": {"$ref": "#/$defs/metric"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"provider": {"const": "flagdnn"}}},
+          "then": {
+            "properties": {
+              "provider_identity": {"$ref": "#/$defs/flagdnnIdentity"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"provider": {"const": "aclnn"}}},
+          "then": {
+            "properties": {
+              "provider_identity": {"$ref": "#/$defs/aclnnIdentity"}
+            }
+          }
+        }
+      ]
     }
   }
 }

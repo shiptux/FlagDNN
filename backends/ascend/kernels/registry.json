@@ -2,5 +2,187 @@
   "schema_version": 1,
   "ownership": "platform",
   "backend": "ascend",
-  "kernels": []
+  "kernels": [
+    {
+      "operations": [
+        "add", "sub", "mul", "div", "min", "max", "mod", "pow",
+        "cmp_eq", "cmp_neq", "cmp_gt", "cmp_ge", "cmp_lt", "cmp_le",
+        "logical_and", "logical_or", "sigmoid_backward"
+      ],
+      "provider": "ascend_triton",
+      "source": "binary.py",
+      "functions": [
+        "binary_contiguous_kernel",
+        "binary_strided_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "binary",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operations": [
+        "relu", "sqrt", "erf", "identity", "exp", "log", "neg", "abs",
+        "ceil", "cos", "floor", "rsqrt", "sin", "tan", "reciprocal",
+        "logical_not",
+        "sigmoid", "tanh", "elu",
+        "gelu", "softplus", "swish", "gelu_approx_tanh"
+      ],
+      "provider": "ascend_triton",
+      "source": "unary.py",
+      "functions": [
+        "unary_pointwise_contiguous_kernel",
+        "unary_pointwise_strided_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "unary",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "binary_select",
+      "provider": "ascend_triton",
+      "source": "ternary.py",
+      "functions": [
+        "binary_select_contiguous_kernel",
+        "binary_select_strided_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "binary",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operations": ["reshape", "transpose", "slice"],
+      "provider": "ascend_triton",
+      "source": "layout.py",
+      "functions": ["layout_copy_kernel"],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "binary",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operations": ["reduction_sum", "reduction_avg", "reduction_mul"],
+      "provider": "ascend_triton",
+      "source": "reduction.py",
+      "functions": [
+        "reduction_3d_persistent_kernel",
+        "reduction_strided_persistent_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "reduction",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "matmul",
+      "provider": "ascend_triton",
+      "source": "matmul.py",
+      "functions": ["matmul_strided_kernel"],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "matmul",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "convolution_fprop",
+      "provider": "ascend_triton",
+      "source": "convolution.py",
+      "functions": [
+        "convolution_fprop_persistent_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "convolution_fprop",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "batchnorm_inference",
+      "provider": "ascend_triton",
+      "source": "normalization.py",
+      "functions": [
+        "batchnorm_inference_nchw_persistent_kernel",
+        "batchnorm_inference_strided_persistent_kernel"
+      ],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "batchnorm_inference",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "batchnorm",
+      "provider": "ascend_triton",
+      "source": "normalization.py",
+      "functions": ["batchnorm_training_persistent_kernel"],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "batchnorm",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "rmsnorm",
+      "provider": "ascend_triton",
+      "source": "normalization.py",
+      "functions": ["rmsnorm_persistent_kernel"],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "rmsnorm",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    },
+    {
+      "operation": "layernorm",
+      "provider": "ascend_triton",
+      "source": "normalization.py",
+      "functions": ["layernorm_persistent_kernel"],
+      "tuning": {
+        "source": "common.yaml",
+        "table": "layernorm",
+        "key": "n_elements",
+        "strategy": "align32",
+        "warmup": 5,
+        "repetitions": 10
+      }
+    }
+  ]
 }

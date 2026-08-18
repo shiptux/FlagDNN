@@ -51,7 +51,7 @@ function(flagdnn_register_benchmark_suite)
   set(options)
   set(one_value_arguments
     PLATFORM ADAPTER_TARGET BACKEND_TARGET TIMEOUT BUILD_RPATH)
-  set(multi_value_arguments COMMAND_ARGS ENVIRONMENT LABELS)
+  set(multi_value_arguments COMMAND_ARGS ENVIRONMENT LABELS OPERATORS)
   cmake_parse_arguments(
     FLAGDNN_BENCH
     "${options}"
@@ -74,7 +74,17 @@ function(flagdnn_register_benchmark_suite)
     set(FLAGDNN_BENCH_TIMEOUT 1800)
   endif()
 
-  foreach(operator IN LISTS FLAGDNN_BENCHMARK_OPERATORS)
+  set(_flagdnn_bench_operators ${FLAGDNN_BENCH_OPERATORS})
+  if(NOT _flagdnn_bench_operators)
+    set(_flagdnn_bench_operators ${FLAGDNN_BENCHMARK_OPERATORS})
+  endif()
+  list(REMOVE_DUPLICATES _flagdnn_bench_operators)
+
+  foreach(operator IN LISTS _flagdnn_bench_operators)
+    if(NOT operator IN_LIST FLAGDNN_BENCHMARK_OPERATORS)
+      message(FATAL_ERROR
+        "Benchmark operator ${operator} is not in FLAGDNN_BENCHMARK_OPERATORS")
+    endif()
     set(entry "${PROJECT_SOURCE_DIR}/benchmark/test_${operator}.cpp")
     if(NOT EXISTS "${entry}")
       message(FATAL_ERROR "Benchmark operator ${operator} has no C++ entry")

@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -363,7 +364,7 @@ int main(int argc, char **argv) {
         flagdnnBinding_t{1, input.data()},
         flagdnnBinding_t{2, output.data()},
     };
-    alignas(64) std::array<unsigned char, 64> workspace{};
+    alignas(256) std::array<unsigned char, 64> workspace{};
     int stream_cookie = 7;
 
     require_status(
@@ -371,8 +372,15 @@ int main(int argc, char **argv) {
         FLAGDNN_STATUS_INVALID_VALUE, "missing contract workspace");
     require_status(
         [&] {
-          executable.execute(bindings, workspace.data(), workspace.size(),
-                             nullptr);
+          executable.execute(
+              bindings, workspace.data() + 1, workspace.size(), &stream_cookie);
+        },
+        FLAGDNN_STATUS_INVALID_VALUE,
+        "misaligned contract workspace");
+    require_status(
+        [&] {
+          executable.execute(
+              bindings, workspace.data(), workspace.size(), nullptr);
         },
         FLAGDNN_STATUS_INVALID_VALUE, "missing contract stream");
 
@@ -535,8 +543,40 @@ int main(int argc, char **argv) {
     require_status([&] { invalid_slice_graph.finalize(); },
                    FLAGDNN_STATUS_INVALID_VALUE, "non-positive slice stride");
 
-    flagdnn::TensorDescriptor chain_input_descriptor(11, FLAGDNN_DATA_FLOAT32,
-                                                     dimensions, strides);
+    constexpr std::array<std::int64_t, 1> extreme_slice_input_dimensions = {
+        2};
+    constexpr std::array<std::int64_t, 1> extreme_slice_input_strides = {1};
+    constexpr std::array<std::int64_t, 1> extreme_slice_output_dimensions = {
+        1};
+    constexpr std::array<std::int64_t, 1> extreme_slice_output_strides = {
+        std::numeric_limits<std::int64_t>::max()};
+    flagdnn::TensorDescriptor extreme_slice_input_descriptor(
+        43,
+        FLAGDNN_DATA_FLOAT32,
+        extreme_slice_input_dimensions,
+        extreme_slice_input_strides);
+    flagdnn::TensorDescriptor extreme_slice_output_descriptor(
+        44,
+        FLAGDNN_DATA_FLOAT32,
+        extreme_slice_output_dimensions,
+        extreme_slice_output_strides);
+    flagdnn::OperationDescriptor extreme_slice("slice");
+    extreme_slice.set_input("input", extreme_slice_input_descriptor);
+    extreme_slice.set_output("output", extreme_slice_output_descriptor);
+    constexpr std::array<std::int64_t, 1> extreme_slice_starts = {0};
+    constexpr std::array<std::int64_t, 1> extreme_slice_limits = {2};
+    constexpr std::array<std::int64_t, 1> extreme_slice_steps = {
+        std::numeric_limits<std::int64_t>::max()};
+    extreme_slice.set_attribute("starts", extreme_slice_starts);
+    extreme_slice.set_attribute("limits", extreme_slice_limits);
+    extreme_slice.set_attribute("slice_strides", extreme_slice_steps);
+    extreme_slice.finalize();
+    flagdnn::Graph extreme_slice_native_graph;
+    extreme_slice_native_graph.add(extreme_slice);
+    extreme_slice_native_graph.finalize();
+
+    flagdnn::TensorDescriptor chain_input_descriptor(
+        11, FLAGDNN_DATA_FLOAT32, dimensions, strides);
     flagdnn::TensorDescriptor chain_intermediate_descriptor(
         12, FLAGDNN_DATA_FLOAT32, dimensions, strides);
     chain_intermediate_descriptor.set_virtual();

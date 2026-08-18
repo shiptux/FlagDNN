@@ -128,9 +128,9 @@ LoweredOperation lower_slice(const OperationSpec& operation) {
       throw ApiError(FLAGDNN_STATUS_INVALID_VALUE,
                      "slice range or stride is invalid");
     }
+    const std::int64_t span = limits[axis] - starts[axis];
     const std::int64_t expected =
-        (limits[axis] - starts[axis] + slice_strides[axis] - 1) /
-        slice_strides[axis];
+        1 + (span - 1) / slice_strides[axis];
     if (output.dimensions[axis] != expected) {
       throw ApiError(FLAGDNN_STATUS_INVALID_VALUE,
                      "slice output shape does not match slice attributes");

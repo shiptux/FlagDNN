@@ -29,7 +29,12 @@ def load_runner(path: Path):
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load runner: {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous_bytecode_setting = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous_bytecode_setting
     return module
 
 
@@ -68,6 +73,33 @@ def main() -> int:
     if len(sys.argv) != 2:
         raise RuntimeError("usage: VerifyRunTestsContract.py RUN_TESTS_PY")
     runner = load_runner(Path(sys.argv[1]).resolve())
+    hygon = runner.load_platform_adapter("hygon")
+    ascend = runner.load_platform_adapter("ascend")
+    nvidia = runner.load_platform_adapter("nvidia")
+    require(
+        hygon is not None and ascend is not None and nvidia is not None,
+        "repository platform test adapters are incomplete",
+    )
+    require(
+        hygon.PREFLIGHT_BY_DEFAULT
+        and not ascend.PREFLIGHT_BY_DEFAULT
+        and not nvidia.PREFLIGHT_BY_DEFAULT
+        and ascend.DEFAULT_TIMEOUT == 7200,
+        "platform adapter defaults changed unexpectedly",
+    )
+    runner_source = Path(runner.__file__).read_text(encoding="utf-8").lower()
+    for platform_detail in (
+        "hygon",
+        "hipdnn",
+        "ascend",
+        "aclnn",
+        "hip_visible_devices",
+        "npu_visible_devices",
+    ):
+        require(
+            platform_detail not in runner_source,
+            f"generic runner contains platform policy: {platform_detail}",
+        )
     manifests = runner.operator_manifests()
     manifest_operators = list(
         dict.fromkeys(
@@ -77,11 +109,11 @@ def main() -> int:
         )
     )
     repository_comparable_catalog = (
-        runner.load_hygon_comparable_case_catalog(manifests["benchmark"])
+        hygon.load_hygon_comparable_case_catalog(manifests["benchmark"])
     )
     require(
         repository_comparable_catalog["metric"]
-        == runner.HYGON_SPEEDUP_METRIC
+        == hygon.SPEEDUP_METRIC
         and repository_comparable_catalog["declared_operator_count"] > 0
         and repository_comparable_catalog["declared_case_count"] > 0
         and repository_comparable_catalog["declared_case_count"]
@@ -100,7 +132,7 @@ def main() -> int:
 
     synthetic_catalog = {
         "schema_version": 1,
-        "metric": runner.HYGON_SPEEDUP_METRIC,
+        "metric": hygon.SPEEDUP_METRIC,
         "source": "synthetic comparable coverage contract",
         "declared_operator_count": 2,
         "declared_case_count": 3,
@@ -121,7 +153,7 @@ def main() -> int:
             }
         }
     }
-    missing_coverage = runner.hygon_comparable_coverage(
+    missing_coverage = hygon.hygon_comparable_coverage(
         partial_results, ["add"], synthetic_catalog
     )
     require(
@@ -133,7 +165,7 @@ def main() -> int:
         == "add_perf_required_b",
         "missing one declared comparable case did not fail coverage",
     )
-    missing_performance = runner.benchmark_speedup_summary(
+    missing_performance = hygon.benchmark_speedup_summary(
         partial_results, 0.9, missing_coverage
     )
     require(
@@ -142,7 +174,7 @@ def main() -> int:
         and not missing_performance["gate_passed"],
         "missing declared comparable case did not fail the speedup gate",
     )
-    no_threshold_missing_performance = runner.benchmark_speedup_summary(
+    no_threshold_missing_performance = hygon.benchmark_speedup_summary(
         partial_results, None, missing_coverage
     )
     require(
@@ -152,7 +184,7 @@ def main() -> int:
         "performance summary contradicted failed coverage without a ratio "
         "threshold",
     )
-    omitted_coverage_performance = runner.benchmark_speedup_summary(
+    omitted_coverage_performance = hygon.benchmark_speedup_summary(
         partial_results, 0.9
     )
     require(
@@ -177,7 +209,7 @@ def main() -> int:
             }
         }
     }
-    complete_coverage = runner.hygon_comparable_coverage(
+    complete_coverage = hygon.hygon_comparable_coverage(
         complete_with_extra_results, ["add"], synthetic_catalog
     )
     require(
@@ -189,12 +221,12 @@ def main() -> int:
         "an extra comparable case was rejected or miscounted",
     )
     require(
-        runner.hygon_comparable_coverage(
+        hygon.hygon_comparable_coverage(
             complete_with_extra_results, ["add"], synthetic_catalog
         )["verified"],
         "an unselected declared operator affected comparable coverage",
     )
-    selected_missing = runner.hygon_comparable_coverage(
+    selected_missing = hygon.hygon_comparable_coverage(
         complete_with_extra_results, ["add", "mul"], synthetic_catalog
     )
     require(
@@ -204,7 +236,7 @@ def main() -> int:
         "selected declared operator subset was not required exactly",
     )
     require(
-        runner.hygon_comparable_coverage(
+        hygon.hygon_comparable_coverage(
             {"pow": {"benchmark": {"status": "skipped", "records": {}}}},
             ["pow"],
             synthetic_catalog,
@@ -216,7 +248,7 @@ def main() -> int:
     hipdnn_record = json.loads(timing("add_perf", "hipdnn"))
     flagdnn_record["median"] = 2.0
     hipdnn_record["median"] = 1.5
-    performance = runner.benchmark_speedup_summary(
+    performance = hygon.benchmark_speedup_summary(
         {
             "add": {
                 "benchmark": {
@@ -240,7 +272,7 @@ def main() -> int:
         and performance["failures"][0]["case"] == "add_perf",
         "per-case speedup gate did not fail closed below threshold",
     )
-    failed_performance = runner.benchmark_speedup_summary(
+    failed_performance = hygon.benchmark_speedup_summary(
         {
             "add": {
                 "benchmark": {
@@ -261,7 +293,7 @@ def main() -> int:
         and not failed_performance["gate_passed"],
         "speedup gate accepted partial records from a failed benchmark",
     )
-    empty_performance = runner.benchmark_speedup_summary({}, 0.9)
+    empty_performance = hygon.benchmark_speedup_summary({}, 0.9)
     require(
         empty_performance["case_count"] == 0
         and not empty_performance["gate_passed"],
@@ -307,7 +339,7 @@ def main() -> int:
                 "schema_version": 1,
                 "platform": "hygon",
                 "suite": "benchmark",
-                "metric": runner.HYGON_SPEEDUP_METRIC,
+                "metric": hygon.SPEEDUP_METRIC,
                 "source": "synthetic catalog parser contract",
                 "declared_operator_count": len(operators),
                 "declared_case_count": sum(map(len, operators.values())),
@@ -326,7 +358,7 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
-        parsed_catalog = runner.load_hygon_comparable_case_catalog(
+        parsed_catalog = hygon.load_hygon_comparable_case_catalog(
             manifests["benchmark"], valid_catalog_path
         )
         require(
@@ -373,7 +405,7 @@ def main() -> int:
                 json.dumps(malformed_catalog), encoding="utf-8"
             )
             try:
-                runner.load_hygon_comparable_case_catalog(
+                hygon.load_hygon_comparable_case_catalog(
                     manifests["benchmark"], malformed_path
                 )
             except RuntimeError:
@@ -388,7 +420,7 @@ def main() -> int:
             '{"schema_version":1,"schema_version":1}', encoding="utf-8"
         )
         try:
-            runner.load_hygon_comparable_case_catalog(
+            hygon.load_hygon_comparable_case_catalog(
                 manifests["benchmark"], duplicate_key_path
             )
         except RuntimeError:
@@ -545,12 +577,12 @@ def main() -> int:
             "multi-config build configuration was not propagated",
         )
 
-        original_catalog_loader = runner.load_hygon_comparable_case_catalog
+        original_catalog_loader = hygon.load_hygon_comparable_case_catalog
 
         def reject_catalog(*_arguments, **_keywords):
             raise RuntimeError("synthetic malformed comparable catalog")
 
-        runner.load_hygon_comparable_case_catalog = reject_catalog
+        hygon.load_hygon_comparable_case_catalog = reject_catalog
         try:
             exit_code, _, stderr = invoke_main(
                 runner,
@@ -569,7 +601,7 @@ def main() -> int:
                 ],
             )
         finally:
-            runner.load_hygon_comparable_case_catalog = original_catalog_loader
+            hygon.load_hygon_comparable_case_catalog = original_catalog_loader
         malformed_main_summary = json.loads(
             summary_path.read_text(encoding="utf-8")
         )
@@ -914,6 +946,47 @@ def main() -> int:
         "NVIDIA functional matmul command omits the host-oracle test",
     )
 
+    discovery_commands: list[list[str]] = []
+    original_run_process_group = runner.run_process_group
+
+    def synthetic_inventory(command, _environment, _timeout):
+        discovery_commands.append(command)
+        return (
+            json.dumps(
+                {
+                    "tests": [
+                        {"name": "functional.synthetic.add"},
+                        {"name": "benchmark.synthetic.matmul"},
+                    ]
+                }
+            ),
+            "",
+            0,
+            False,
+        )
+
+    runner.run_process_group = synthetic_inventory
+    try:
+        filtered_manifests = runner.registered_manifests(
+            Path("/tmp/flagdnn-build"),
+            "synthetic",
+            manifests,
+            ["functional", "benchmark"],
+            {},
+            1800,
+            "Debug",
+        )
+    finally:
+        runner.run_process_group = original_run_process_group
+    require(
+        filtered_manifests == {
+            "functional": ["add"],
+            "benchmark": ["matmul"],
+        }
+        and discovery_commands[0][-2:] == ["-C", "Debug"],
+        "configured CTest inventory was not filtered generically",
+    )
+
     records, errors = runner.benchmark_records(
         timing("add_fp32_2x3", "flagdnn")
         + "\n"
@@ -937,6 +1010,64 @@ def main() -> int:
         "malformed steady-state timing record was silently ignored",
     )
 
+    ascend_metric = {
+        "median": 2.0,
+        "p90": 3.0,
+        "samples": [1.0, 2.0, 3.0],
+    }
+    ascend_record = {
+        "schema_version": 2,
+        "kind": "steady_state",
+        "provider": "flagdnn",
+        "case": "add_fp32_2x3",
+        "environment": {
+            "soc_fingerprint": "synthetic-soc",
+            "cann_package_version": "synthetic-cann",
+            "ascendcl_build_id": "synthetic-ascendcl",
+            "runtime_build_id": "synthetic-runtime",
+        },
+        "provider_identity": {
+            "libtriton_jit_sha256": "0" * 64,
+            "compiler_identity_sha256": "1" * 64,
+            "artifact_request_sha256": "2" * 64,
+            "launch_abi": "ltj_npu_raw_v1",
+            "selected_candidate": "synthetic-candidate",
+        },
+        "benchmark_config": {
+            "warmup_iterations": 0,
+            "sample_count": 3,
+            "iterations_per_sample": 1,
+        },
+        "stream_us": ascend_metric,
+        "submit_us": ascend_metric,
+        "end_to_end_us": ascend_metric,
+    }
+    ascend_records, ascend_errors = runner.benchmark_records(
+        json.dumps(ascend_record), ascend
+    )
+    require(
+        not ascend_errors and set(ascend_records) == {"add_fp32_2x3"},
+        f"valid Ascend timing record rejected: {ascend_errors}",
+    )
+    invalid_identity = {
+        **ascend_record,
+        "provider_identity": {"unexpected": "identity"},
+    }
+    invalid_records, invalid_errors = runner.benchmark_records(
+        json.dumps(invalid_identity), ascend
+    )
+    require(
+        not invalid_records and invalid_errors,
+        "invalid Ascend provider identity was accepted",
+    )
+    unowned_records, unowned_errors = runner.benchmark_records(
+        json.dumps(ascend_record)
+    )
+    require(
+        not unowned_records and unowned_errors,
+        "generic runner accepted a platform schema without its adapter",
+    )
+
     original_run_process_group = runner.run_process_group
     runner.run_process_group = lambda *_args, **_kwargs: ("", "", 0, False)
     try:
@@ -958,13 +1089,13 @@ def main() -> int:
         "passed generic benchmark without timing records was accepted",
     )
     require(
-        not runner.validate_hygon_benchmark_pairs(
+        not hygon.validate_hygon_benchmark_pairs(
             records, "add", manifest_operators
         ),
         "valid Hygon benchmark pair rejected",
     )
     require(
-        runner.validate_hygon_benchmark_pairs(
+        hygon.validate_hygon_benchmark_pairs(
             records, "mul", manifest_operators
         ),
         "wrong-operator benchmark case accepted",
@@ -981,7 +1112,7 @@ def main() -> int:
             }
         }
         require(
-            runner.validate_hygon_benchmark_pairs(
+            hygon.validate_hygon_benchmark_pairs(
                 overlapping, shorter, manifest_operators
             ),
             f"{shorter} accepted a {longer} benchmark case",
@@ -995,7 +1126,7 @@ def main() -> int:
                 case: {"flagdnn": {}, "hipdnn": {}}
             }
             require(
-                not runner.validate_hygon_benchmark_pairs(
+                not hygon.validate_hygon_benchmark_pairs(
                     convolution_records, operator, manifest_operators
                 ),
                 f"{operator} rejected rank-qualified case {case}",
@@ -1004,29 +1135,29 @@ def main() -> int:
                 "conv_wgrad" if direction != "wgrad" else "conv_dgrad"
             )
             require(
-                runner.validate_hygon_benchmark_pairs(
+                hygon.validate_hygon_benchmark_pairs(
                     convolution_records,
                     wrong_operator,
                     manifest_operators,
                 ),
                 f"{wrong_operator} accepted case {case}",
             )
-            convolution_skip = runner.hipdnn_skip_records(
+            convolution_skip = hygon.hipdnn_skip_records(
                 f"[SKIP][hipdnn] op={operator} case={case} "
                 "reason=HIPDNN_STATUS_NOT_SUPPORTED"
             )
             require(
-                not runner.validate_hygon_skip_records(
+                not hygon.validate_hygon_skip_records(
                     convolution_skip, operator, manifest_operators
                 ),
                 f"{operator} rejected rank-qualified skip case {case}",
             )
-            wrong_convolution_skip = runner.hipdnn_skip_records(
+            wrong_convolution_skip = hygon.hipdnn_skip_records(
                 f"[SKIP][hipdnn] op={wrong_operator} case={case} "
                 "reason=HIPDNN_STATUS_NOT_SUPPORTED"
             )
             require(
-                runner.validate_hygon_skip_records(
+                hygon.validate_hygon_skip_records(
                     wrong_convolution_skip,
                     wrong_operator,
                     manifest_operators,
@@ -1040,7 +1171,7 @@ def main() -> int:
         "xconv2d_dgrad_fp32_case",
     ):
         require(
-            runner.benchmark_case_operator(
+            hygon.benchmark_case_operator(
                 invalid_case, manifest_operators
             )
             is None,
@@ -1051,21 +1182,21 @@ def main() -> int:
         "[SKIP][hipdnn] op=add case=add_fp32_2x3 "
         "reason=HIPDNN_STATUS_NOT_SUPPORTED"
     )
-    skips = runner.hipdnn_skip_records(skip_line)
+    skips = hygon.hipdnn_skip_records(skip_line)
     require(
-        not runner.validate_hygon_skip_records(
+        not hygon.validate_hygon_skip_records(
             skips, "add", manifest_operators
         ),
         "valid Hygon skip rejected",
     )
     require(
-        runner.validate_hygon_skip_records(
+        hygon.validate_hygon_skip_records(
             skips, "mul", manifest_operators
         ),
         "wrong-operator Hygon skip accepted",
     )
     require(
-        runner.validate_hygon_skip_records(
+        hygon.validate_hygon_skip_records(
             skips + skips, "add", manifest_operators
         ),
         "duplicate Hygon skip case accepted",
@@ -1078,31 +1209,31 @@ def main() -> int:
         "[SKIP][hipdnn] op=add reason=missing-case "
         "case=add_fp32_2x3",
     ):
-        malformed_records = runner.hipdnn_skip_records(malformed_skip)
+        malformed_records = hygon.hipdnn_skip_records(malformed_skip)
         require(
             malformed_records
-            and runner.validate_hygon_skip_records(
+            and hygon.validate_hygon_skip_records(
                 malformed_records, "add", manifest_operators
             ),
             f"malformed structured SKIP was accepted: {malformed_skip}",
         )
 
-    add_square_skip = runner.hipdnn_skip_records(
+    add_square_skip = hygon.hipdnn_skip_records(
         "[SKIP][hipdnn] op=add case=add_square_fp32_2x3 "
         "reason=HIPDNN_STATUS_NOT_SUPPORTED"
     )
     require(
-        runner.validate_hygon_skip_records(
+        hygon.validate_hygon_skip_records(
             add_square_skip, "add", manifest_operators
         ),
         "add accepted an add_square skip case by prefix",
     )
-    add_square_skip = runner.hipdnn_skip_records(
+    add_square_skip = hygon.hipdnn_skip_records(
         "[SKIP][hipdnn] op=add_square case=add_square_fp32_2x3 "
         "reason=HIPDNN_STATUS_NOT_SUPPORTED"
     )
     require(
-        not runner.validate_hygon_skip_records(
+        not hygon.validate_hygon_skip_records(
             add_square_skip, "add_square", manifest_operators
         ),
         "add_square rejected its own longest-manifest skip case",
@@ -1115,7 +1246,7 @@ def main() -> int:
         + "\nFLAGDNN_ADD_BENCHMARK: PASS cases=1 executed=1 skipped=0\n"
     )
     require(
-        not runner.validate_hygon_case_accounting(
+        not hygon.validate_hygon_case_accounting(
             benchmark_output,
             "add",
             "benchmark",
@@ -1126,7 +1257,7 @@ def main() -> int:
         "valid Hygon benchmark accounting rejected",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_FUNCTIONAL: PASS executed=1 skipped=0",
             "add",
             "functional",
@@ -1137,7 +1268,7 @@ def main() -> int:
         "functional accounting without cases=<count> was accepted",
     )
     require(
-        not runner.validate_hygon_case_accounting(
+        not hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_FUNCTIONAL: PASS cases=1 executed=1 skipped=0",
             "add",
             "functional",
@@ -1148,7 +1279,7 @@ def main() -> int:
         "valid functional case accounting rejected",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_FUNCTIONAL: PASS cases=0 executed=0 skipped=0",
             "add",
             "functional",
@@ -1159,7 +1290,7 @@ def main() -> int:
         "zero-case PASS accounting was accepted",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_FUNCTIONAL: PASS cases=1 executed=0 skipped=1",
             "add",
             "functional",
@@ -1170,7 +1301,7 @@ def main() -> int:
         "PASS accounting with no executed case was accepted",
     )
     require(
-        not runner.validate_hygon_case_accounting(
+        not hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_FUNCTIONAL: SKIP cases=1 executed=0 skipped=1",
             "add",
             "functional",
@@ -1181,7 +1312,7 @@ def main() -> int:
         "valid all-SKIP accounting was rejected",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_FUNCTIONAL: SKIP cases=1 executed=1 skipped=0",
             "add",
             "functional",
@@ -1192,7 +1323,7 @@ def main() -> int:
         "SKIP accounting with an executed case was accepted",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_BENCHMARK: PASS cases=2 executed=2 skipped=0",
             "add",
             "benchmark",
@@ -1203,7 +1334,7 @@ def main() -> int:
         "incomplete Hygon benchmark coverage accepted",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_MUL_FUNCTIONAL: PASS cases=1 executed=1 skipped=0",
             "add",
             "functional",
@@ -1214,7 +1345,7 @@ def main() -> int:
         "functional accounting accepted another operator's marker",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_BENCHMARK: PASS cases=1 executed=1 skipped=0",
             "add",
             "functional",
@@ -1225,7 +1356,7 @@ def main() -> int:
         "functional accounting accepted the benchmark marker",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_FUNCTIONAL: PASS cases=1 executed=1 skipped=0\n"
             "FLAGDNN_MUL_FUNCTIONAL: PASS cases=1 executed=1 skipped=0",
             "add",
@@ -1237,7 +1368,7 @@ def main() -> int:
         "functional accounting ignored an additional foreign marker",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_SQUARE_FUNCTIONAL: PASS cases=1 "
             "executed=1 skipped=0",
             "add",
@@ -1249,7 +1380,7 @@ def main() -> int:
         "add accounting accepted the add_square marker by prefix",
     )
     require(
-        not runner.validate_hygon_case_accounting(
+        not hygon.validate_hygon_case_accounting(
             "FLAGDNN_ADD_SQUARE_FUNCTIONAL: PASS cases=1 "
             "executed=1 skipped=0",
             "add_square",
@@ -1261,7 +1392,7 @@ def main() -> int:
         "add_square accounting rejected its exact marker",
     )
     require(
-        not runner.validate_hygon_case_accounting(
+        not hygon.validate_hygon_case_accounting(
             "FLAGDNN_CONVOLUTION_FUNCTIONAL: PASS cases=1 "
             "executed=1 skipped=0",
             "conv_fprop",
@@ -1273,7 +1404,7 @@ def main() -> int:
         "NVIDIA-aligned convolution family marker was rejected",
     )
     require(
-        runner.validate_hygon_case_accounting(
+        hygon.validate_hygon_case_accounting(
             "FLAGDNN_CONV_FPROP_FUNCTIONAL: PASS cases=1 "
             "executed=1 skipped=0",
             "conv_fprop",
@@ -1285,7 +1416,7 @@ def main() -> int:
         "conv_fprop accepted a non-contract per-operator marker",
     )
     require(
-        not runner.validate_hygon_case_accounting(
+        not hygon.validate_hygon_case_accounting(
             "FLAGDNN_CONV_FPROP_BENCHMARK: PASS cases=1 "
             "executed=1 skipped=0",
             "conv_fprop",
@@ -1320,7 +1451,7 @@ def main() -> int:
         explicit.get("HIP_VISIBLE_DEVICES") == "0"
         and not any(
             variable != "HIP_VISIBLE_DEVICES" and variable in explicit
-            for variable in runner.HYGON_VISIBILITY_VARIABLES
+            for variable in hygon.VISIBILITY_VARIABLES
         ),
         "explicit Hygon device selection is not isolated",
     )
@@ -1329,12 +1460,30 @@ def main() -> int:
     )
     require(
         not any(
-            runner.HYGON_CASE_FILTER_PATTERN.fullmatch(name)
+            hygon.CASE_FILTER_PATTERN.fullmatch(name)
             for name in unmasked
         )
         and unmasked.get("HIP_VISIBLE_DEVICES") == "0"
         and unmasked.get("CUDA_VISIBLE_DEVICES") == "stale",
         "Hygon runner retained a FLAGDNN_*_CASE filter",
+    )
+    ascend_environment = runner.device_environment(
+        "ascend", "2", {}, adapter=ascend
+    )
+    require(
+        ascend_environment
+        == {
+            "ASCEND_RT_VISIBLE_DEVICES": "2",
+            "NPU_VISIBLE_DEVICES": "2",
+        },
+        "Ascend device visibility policy was not delegated",
+    )
+    nvidia_environment = runner.device_environment(
+        "nvidia", "3", {}, adapter=nvidia
+    )
+    require(
+        nvidia_environment == {"CUDA_VISIBLE_DEVICES": "3"},
+        "NVIDIA device visibility policy was not delegated",
     )
 
     if os.name == "posix" and Path("/proc/self/stat").is_file():

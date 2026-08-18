@@ -1,0 +1,183 @@
+# Copyright 2026 FlagOS Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Ascend-owned persistent layout materialization kernel."""
+
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def layout_copy_kernel(
+    input_ptr,
+    output_ptr,
+    n_elements,
+    INPUT_BASE: tl.constexpr,
+    ELEMENT_SIZE_BYTES: tl.constexpr,
+    LAYOUT_MODE: tl.constexpr,
+    INPUT_DIM_0: tl.constexpr,
+    INPUT_DIM_1: tl.constexpr,
+    INPUT_DIM_2: tl.constexpr,
+    INPUT_DIM_3: tl.constexpr,
+    INPUT_DIM_4: tl.constexpr,
+    INPUT_DIM_5: tl.constexpr,
+    INPUT_DIM_6: tl.constexpr,
+    INPUT_DIM_7: tl.constexpr,
+    INPUT_STRIDE_0: tl.constexpr,
+    INPUT_STRIDE_1: tl.constexpr,
+    INPUT_STRIDE_2: tl.constexpr,
+    INPUT_STRIDE_3: tl.constexpr,
+    INPUT_STRIDE_4: tl.constexpr,
+    INPUT_STRIDE_5: tl.constexpr,
+    INPUT_STRIDE_6: tl.constexpr,
+    INPUT_STRIDE_7: tl.constexpr,
+    OUTPUT_DIM_0: tl.constexpr,
+    OUTPUT_DIM_1: tl.constexpr,
+    OUTPUT_DIM_2: tl.constexpr,
+    OUTPUT_DIM_3: tl.constexpr,
+    OUTPUT_DIM_4: tl.constexpr,
+    OUTPUT_DIM_5: tl.constexpr,
+    OUTPUT_DIM_6: tl.constexpr,
+    OUTPUT_DIM_7: tl.constexpr,
+    OUTPUT_STRIDE_0: tl.constexpr,
+    OUTPUT_STRIDE_1: tl.constexpr,
+    OUTPUT_STRIDE_2: tl.constexpr,
+    OUTPUT_STRIDE_3: tl.constexpr,
+    OUTPUT_STRIDE_4: tl.constexpr,
+    OUTPUT_STRIDE_5: tl.constexpr,
+    OUTPUT_STRIDE_6: tl.constexpr,
+    OUTPUT_STRIDE_7: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    WORKER_COUNT: tl.constexpr,
+):
+    program_id = tl.program_id(0).to(tl.int64)
+    start = program_id * BLOCK_SIZE
+    if LAYOUT_MODE == 1:
+        linear_start = start
+        while linear_start < n_elements:
+            logical = linear_start + tl.arange(0, BLOCK_SIZE)
+            active = logical < n_elements
+            value = tl.load(
+                input_ptr + INPUT_BASE + logical, mask=active, other=0
+            )
+            tl.store(output_ptr + logical, value, mask=active)
+            linear_start += WORKER_COUNT * BLOCK_SIZE
+
+    if LAYOUT_MODE == 2:
+        outer_rows = n_elements // OUTPUT_DIM_7
+        row = program_id
+        while row < outer_rows:
+            output_remaining = row
+            output_row_offset = row * 0
+            coordinate = output_remaining % OUTPUT_DIM_6
+            output_remaining = output_remaining // OUTPUT_DIM_6
+            output_row_offset += coordinate * OUTPUT_STRIDE_6
+            coordinate = output_remaining % OUTPUT_DIM_5
+            output_remaining = output_remaining // OUTPUT_DIM_5
+            output_row_offset += coordinate * OUTPUT_STRIDE_5
+            coordinate = output_remaining % OUTPUT_DIM_4
+            output_remaining = output_remaining // OUTPUT_DIM_4
+            output_row_offset += coordinate * OUTPUT_STRIDE_4
+            coordinate = output_remaining % OUTPUT_DIM_3
+            output_remaining = output_remaining // OUTPUT_DIM_3
+            output_row_offset += coordinate * OUTPUT_STRIDE_3
+            coordinate = output_remaining % OUTPUT_DIM_2
+            output_remaining = output_remaining // OUTPUT_DIM_2
+            output_row_offset += coordinate * OUTPUT_STRIDE_2
+            coordinate = output_remaining % OUTPUT_DIM_1
+            output_remaining = output_remaining // OUTPUT_DIM_1
+            output_row_offset += coordinate * OUTPUT_STRIDE_1
+            output_row_offset += (
+                output_remaining % OUTPUT_DIM_0
+            ) * OUTPUT_STRIDE_0
+
+            column_start = row * 0
+            while column_start < OUTPUT_DIM_7:
+                column = column_start + tl.arange(0, BLOCK_SIZE)
+                active = column < OUTPUT_DIM_7
+                output_offsets = (
+                    output_row_offset + column * OUTPUT_STRIDE_7
+                )
+                input_offsets = INPUT_BASE + output_offsets
+                value = tl.load(
+                    input_ptr + input_offsets, mask=active, other=0
+                )
+                tl.store(output_ptr + output_offsets, value, mask=active)
+                column_start += BLOCK_SIZE
+            row += WORKER_COUNT
+
+    if LAYOUT_MODE != 0:
+        start = n_elements
+    while start < n_elements:
+        logical = start + tl.arange(0, BLOCK_SIZE)
+        active = logical < n_elements
+        input_remaining = logical
+        output_remaining = logical
+        input_offsets = tl.full((BLOCK_SIZE,), INPUT_BASE, dtype=tl.int64)
+        output_offsets = tl.zeros((BLOCK_SIZE,), dtype=tl.int64)
+
+        coordinate = input_remaining % INPUT_DIM_7
+        input_remaining = input_remaining // INPUT_DIM_7
+        input_offsets += coordinate * INPUT_STRIDE_7
+        coordinate = input_remaining % INPUT_DIM_6
+        input_remaining = input_remaining // INPUT_DIM_6
+        input_offsets += coordinate * INPUT_STRIDE_6
+        coordinate = input_remaining % INPUT_DIM_5
+        input_remaining = input_remaining // INPUT_DIM_5
+        input_offsets += coordinate * INPUT_STRIDE_5
+        coordinate = input_remaining % INPUT_DIM_4
+        input_remaining = input_remaining // INPUT_DIM_4
+        input_offsets += coordinate * INPUT_STRIDE_4
+        coordinate = input_remaining % INPUT_DIM_3
+        input_remaining = input_remaining // INPUT_DIM_3
+        input_offsets += coordinate * INPUT_STRIDE_3
+        coordinate = input_remaining % INPUT_DIM_2
+        input_remaining = input_remaining // INPUT_DIM_2
+        input_offsets += coordinate * INPUT_STRIDE_2
+        coordinate = input_remaining % INPUT_DIM_1
+        input_remaining = input_remaining // INPUT_DIM_1
+        input_offsets += coordinate * INPUT_STRIDE_1
+        input_offsets += (input_remaining % INPUT_DIM_0) * INPUT_STRIDE_0
+
+        coordinate = output_remaining % OUTPUT_DIM_7
+        output_remaining = output_remaining // OUTPUT_DIM_7
+        output_offsets += coordinate * OUTPUT_STRIDE_7
+        coordinate = output_remaining % OUTPUT_DIM_6
+        output_remaining = output_remaining // OUTPUT_DIM_6
+        output_offsets += coordinate * OUTPUT_STRIDE_6
+        coordinate = output_remaining % OUTPUT_DIM_5
+        output_remaining = output_remaining // OUTPUT_DIM_5
+        output_offsets += coordinate * OUTPUT_STRIDE_5
+        coordinate = output_remaining % OUTPUT_DIM_4
+        output_remaining = output_remaining // OUTPUT_DIM_4
+        output_offsets += coordinate * OUTPUT_STRIDE_4
+        coordinate = output_remaining % OUTPUT_DIM_3
+        output_remaining = output_remaining // OUTPUT_DIM_3
+        output_offsets += coordinate * OUTPUT_STRIDE_3
+        coordinate = output_remaining % OUTPUT_DIM_2
+        output_remaining = output_remaining // OUTPUT_DIM_2
+        output_offsets += coordinate * OUTPUT_STRIDE_2
+        coordinate = output_remaining % OUTPUT_DIM_1
+        output_remaining = output_remaining // OUTPUT_DIM_1
+        output_offsets += coordinate * OUTPUT_STRIDE_1
+        output_offsets += (
+            output_remaining % OUTPUT_DIM_0
+        ) * OUTPUT_STRIDE_0
+
+        # The compiler gives layout kernels an integer pointer signature whose
+        # width is independently bound to ELEMENT_SIZE_BYTES. Loading through
+        # that raw signature preserves NaN payloads and signed zero bits.
+        value = tl.load(input_ptr + input_offsets, mask=active, other=0)
+        tl.store(output_ptr + output_offsets, value, mask=active)
+        start += WORKER_COUNT * BLOCK_SIZE

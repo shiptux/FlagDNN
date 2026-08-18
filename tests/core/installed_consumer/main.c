@@ -67,9 +67,11 @@ int main(void) {
       flagdnnSetConvolutionFpropOperationDescriptor;
   const flagdnnPointwiseAttributes_t pointwise_attributes =
       FLAGDNN_POINTWISE_ATTRIBUTES_INITIALIZER;
-  return flagdnnGetVersion() == 100U &&
+  return flagdnnGetVersion() == FLAGDNN_VERSION_NUMBER &&
                  strcmp(flagdnnGetVersionString(),
                         FLAGDNN_VERSION_STRING) == 0 &&
+                 FLAGDNN_EXECUTION_CONTRACT_VERSION == 2U &&
+                 flagdnnGetExecutionContractVersion() == 2U &&
                  set_tensor_virtual != NULL &&
                  get_tensor_virtual != NULL &&
                  set_pointwise != NULL &&

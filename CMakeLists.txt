@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.23)
 
 project(
   FlagDNN
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Native C/C++ runtime for FlagDNN"
   LANGUAGES C CXX)
 
@@ -90,7 +90,7 @@ configure_package_config_file(
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/FlagDNNConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
-  COMPATIBILITY SameMajorVersion)
+  COMPATIBILITY SameMinorVersion)
 install(EXPORT FlagDNNTargets
   FILE FlagDNNTargets.cmake
   NAMESPACE FlagDNN::
